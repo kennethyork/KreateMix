@@ -1,6 +1,6 @@
 # MixCreate
 
-Self-hosted social media scheduling, written in plain PHP, HTML, CSS and JavaScript. No framework, no Composer, no npm, no build step. Inspired by Mixpost; all code here is original.
+Self-hosted social media scheduling and analytics in **one file**: `index.php`. Plain PHP, HTML, CSS and JavaScript, with no framework, Composer, npm or build step, and no folders to set up. Inspired by Mixpost; all code here is original.
 
 ## Features
 
@@ -30,6 +30,7 @@ Self-hosted social media scheduling, written in plain PHP, HTML, CSS and JavaScr
 - **Push notifications** — failed posts, approvals, new comments; installable as an app on phone and desktop
 - **Webhooks** — signed with HMAC-SHA256, retried with backoff
 - **Platforms** — X, Mastodon, Bluesky, Facebook Pages, Instagram, LinkedIn, YouTube, Threads, TikTok, Pinterest, Google Business Profile
+- **Works offline** — drafts autosave on your device, pages you've opened still load without a connection, and posts made offline send themselves when you're back
 - Dark mode, mobile layout, encrypted tokens at rest
 
 ## Requirements
@@ -40,58 +41,80 @@ Self-hosted social media scheduling, written in plain PHP, HTML, CSS and JavaScr
 
 ## Install
 
-1. Upload the folder to your server.
-2. Point your domain's document root at the `public/` folder.
-   On shared hosting where you can't change the document root, upload everything as is: the root `.htaccess` routes requests into `public/` and blocks the rest.
-3. Make `storage/` and `public/uploads/` writable by the web server (and the project folder, for the first run).
-4. Open the site. MixCreate creates `config.php` with fresh secrets and walks you through creating the admin account.
-5. Add the scheduler to cron:
+1. Upload `index.php` to your site's web root (or any folder in it).
+2. Open the site in a browser and create the admin account.
+3. Add the scheduler to cron, running as the same user as PHP on your site:
 
    ```
-   * * * * * php /path/to/mixcreate/cron.php >/dev/null 2>&1
+   * * * * * php /path/to/index.php cron >/dev/null 2>&1
    ```
 
-   No cron access? Call `https://your-site/cron?key=CRON_KEY` every minute from any uptime or cron service. `CRON_KEY` is in `config.php`.
+   No cron access? Call `https://your-site/cron?key=CRON_KEY` every minute from any uptime or cron service. `CRON_KEY` is in the settings file.
 
-6. Optional: under **Integrations**, add a mail server (for emailed reports), an OpenRouter key for AI, Canva, Google Drive and ads platform keys.
-7. As the admin, open **Platform API keys** and add keys for the platforms you want. Each one shows the callback URL to register with the platform. Mastodon and Bluesky need no keys.
+4. Optional: under **Integrations**, add a mail server (for emailed reports), an OpenRouter key for AI, Canva, Google Drive and ads platform keys.
+5. As the admin, open **Platform API keys** and add keys for the platforms you want. Each one shows the callback URL to register with the platform. Mastodon and Bluesky need no keys.
+
+To update, replace `index.php` with the new one. The database is upgraded automatically.
+
+### What it creates
+
+On first run MixCreate writes, and never anything else:
+
+| File | What it is |
+|---|---|
+| `.ht.mixcreate-config.php` (next to `index.php`) | Settings and the secret key that encrypts your tokens. A PHP file, so it shows nothing if requested in a browser. |
+| `.ht.mixcreate-<random>.sqlite` | The database: posts, accounts, analytics, and your uploaded images and videos. It goes **one folder above** `index.php` when that folder is writable, where the web server can't reach it; otherwise next to `index.php` with an unguessable name. `db_path` in the settings file says where. |
+| `.htaccess` (Apache only) | Rewrite rules for clean URLs. |
+
+**Back up** the settings file and the database file together: the key in one decrypts the tokens in the other.
+
+### CloudPanel
+
+Create a PHP site, upload `index.php` to `htdocs/your-domain`, and open the domain. No root directory change is needed. The database usually lands in `htdocs/`, outside the web root. Add the cron job under the site's **Cron Jobs** tab: `php /home/<site-user>/htdocs/<your-domain>/index.php cron` every minute. Raise **Upload max filesize** and **Post max size** in the site's PHP settings if you post videos.
 
 ### Nginx
 
+Send every request that isn't a file to `index.php`:
+
 ```nginx
-root /var/www/mixcreate/public;
+root /var/www/mixcreate;
 index index.php;
 client_max_body_size 200M;
 
-location / { try_files $uri /index.php?$query_string; }
+location / { try_files $uri /index.php?$args; }
+location ~ /\.ht { deny all; }
 location ~ \.php$ {
+    try_files $uri =404;
     include fastcgi_params;
     fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
     fastcgi_pass unix:/run/php/php8.3-fpm.sock;
 }
-location ^~ /uploads/ { location ~ \.php$ { deny all; } }
 ```
 
 Raise `upload_max_filesize` and `post_max_size` in `php.ini` if you post videos.
 
+### Without URL rewriting
+
+If your server can't rewrite URLs, pages still work at `https://your-site/index.php/...`. Set `app_url` to `https://your-site/index.php` in the settings file so every link uses that form.
+
 ### Local development
 
 ```
-php -S localhost:8000 -t public public/index.php
+php -S localhost:8000 index.php
 ```
 
-Set `'debug' => true` in `config.php` to see errors and enable the **Sandbox** platform, which fakes publishing so you can test scheduling without real accounts.
+Set `'debug' => true` in the settings file to see errors and enable the **Sandbox** platform, which fakes publishing so you can test scheduling without real accounts.
 
 ## Configuration
 
-`config.php` (created on first run, never commit it):
+`.ht.mixcreate-config.php` (created on first run, never commit it):
 
 | Key | Purpose |
 |---|---|
 | `app_url` | Public URL without trailing slash. Leave empty to detect it. Set it if you're behind a proxy or need exact OAuth callback URLs. |
 | `app_key` | Encrypts API keys and access tokens. Changing it disconnects every account. |
 | `cron_key` | Secret for the web cron URL. |
-| `db_path` | SQLite database file. |
+| `db_path` | The database file (absolute, or relative to `index.php`'s folder). |
 | `max_upload_mb` | Upload size limit. |
 | `debug` | Show errors and enable the Sandbox platform. |
 
@@ -172,7 +195,7 @@ curl -X POST https://your-site/api/v1/posts \
 
 ### Looker Studio
 
-Paste `docs/looker-studio-connector.gs` into a new [Apps Script](https://script.google.com) project, deploy it as a community connector, then enter your site URL and an API token. Every account's daily metrics become a Looker Studio data source.
+Download the connector script from **API & webhooks** (or `https://your-site/looker-studio-connector.gs`), paste it into a new [Apps Script](https://script.google.com) project, deploy it as a community connector, then enter your site URL and an API token. Every account's daily metrics become a Looker Studio data source.
 
 ## MCP server
 
@@ -196,19 +219,7 @@ Verify `X-MixCreate-Signature`, which is `sha256=` followed by the HMAC-SHA256 o
 
 ## Extending
 
-Drop a folder in `modules/` with a `module.php`. It's loaded on every request and can register routes, platforms, sidebar items and event listeners through `App\Hooks`; see the comment at the top of `src/Hooks.php`.
-
-## Project layout
-
-```
-public/          web root: index.php, assets, uploads
-src/             application code (App\ namespace)
-src/Providers/   one class per social platform
-views/           PHP templates
-database/        SQL migrations, applied automatically
-storage/         SQLite database, logs (not web-accessible)
-cron.php         scheduler entry point
-```
+Optional: put a `module.php` in `modules/<name>/` next to `index.php`. It's loaded on every request and can register routes, platforms, sidebar items and event listeners through `App\Hooks` (see the `Hooks` class in `index.php`). Nothing is needed if you don't use modules.
 
 ## License
 

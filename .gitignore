@@ -1,10 +1,4 @@
-/config.php
-/storage/*
-!/storage/.gitkeep
-!/storage/.htaccess
-/storage/logs/*
-!/storage/logs/.gitkeep
-/public/uploads/*
-!/public/uploads/.gitkeep
-!/public/uploads/.htaccess
+# Created by MixCreate on first run
+.ht.mixcreate-*
+.htaccess
 .DS_Store
