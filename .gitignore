@@ -3,3 +3,6 @@
 .ht.mixcreate-*
 .htaccess
 .DS_Store
+
+# Built by cloud/build.php
+/dist/

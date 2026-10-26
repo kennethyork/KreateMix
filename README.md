@@ -139,7 +139,7 @@ Set `'debug' => true` in the settings file to see errors and enable the **Sandbo
 | Pinterest | App ID/secret | Each board is its own account. First line is the pin title; a link in the text becomes the pin link. |
 | Google Business Profile | Google OAuth client | Requires Google to grant API access. Each location is its own account. |
 
-Facebook, Instagram, Threads, TikTok photos and Google Business fetch media from your server by URL, so your install must be reachable from the internet (set `app_url`). API versions are constants at the top of each class in `src/Providers/` (e.g. `Facebook::VERSION`, `LinkedIn::VERSION`) if a platform retires one.
+Facebook, Instagram, Threads, TikTok photos and Google Business fetch media from your server by URL, so your install must be reachable from the internet (set `app_url`). API versions are constants at the top of each provider class in `index.php` (e.g. `Facebook::VERSION`, `LinkedIn::VERSION`) if a platform retires one.
 
 ### Integrations notes
 
@@ -232,6 +232,10 @@ Verify `X-KreateMix-Signature` (also sent as `X-MixCreate-Signature` for receive
 
 Optional: put a `module.php` in `modules/<name>/` next to `index.php`. It's loaded on every request and can register routes, platforms, sidebar items and event listeners through `App\Hooks` (see the `Hooks` class in `index.php`). Nothing is needed if you don't use modules.
 
+## KreateMix Cloud
+
+The hosted, paid edition is built from this file: `cloud/` holds the billing code (sign-up, Stripe, plans and limits, the sales site) as edits on top of `index.php`. Run `php cloud/build.php` to get `dist/cloud/index.php`. See [`cloud/README.md`](cloud/README.md). The self-hosted `index.php` never contains any of it.
+
 ## Upgrading from MixCreate
 
 Replace `index.php`. On the first request, `.ht.mixcreate-config.php` is renamed to `.ht.kreatemix-config.php` and keeps pointing at your existing database. Everyone signs in once more (the session cookie was renamed). Existing API tokens (`mc_…`) keep working; new ones start with `km_`.
@@ -240,4 +244,4 @@ Replace `index.php`. On the first request, `.ht.mixcreate-config.php` is renamed
 
 GNU Affero General Public License v3.0 or later (see `LICENSE`). Copyright (C) 2026 Kenneth York. Versions released before the license change remain available under MIT.
 
-If you run a modified copy for other people over a network, the AGPL asks you to offer them its source code. The **Source code** link in the app's menu points to this repository; change it if you publish your changes elsewhere.
+If you run a modified copy for other people over a network, the AGPL asks you to offer them its source code. The **Source code** link in the app's menu points to this repository (which also holds the hosted edition's code, in `cloud/`); change it if you publish your changes elsewhere.
