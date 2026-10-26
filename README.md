@@ -27,7 +27,8 @@ Self-hosted social media scheduling and analytics in **one file**: `index.php`. 
 - **REST API** — bearer tokens; create, schedule, approve posts, upload media, export analytics (JSON or CSV)
 - **MCP server** — let Claude or any MCP client draft posts, read analytics and answer comments
 - **Looker Studio** — a community connector for your analytics
-- **Push notifications** — failed posts, approvals, new comments; installable as an app on phone and desktop
+- **Installable app (PWA)** — install it on your phone or computer from the **Install** button in the menu (iPhone gets step-by-step instructions). Runs in its own window, shows unread comments on the app icon, has shortcuts to New post, Calendar and Inbox, and appears in your phone's share menu so you can share a link or text straight into a new post
+- **Push notifications** — failed posts, approvals, new comments
 - **Webhooks** — signed with HMAC-SHA256, retried with backoff
 - **Platforms** — X, Mastodon, Bluesky, Facebook Pages, Instagram, LinkedIn, YouTube, Threads, TikTok, Pinterest, Google Business Profile
 - **Works offline** — drafts autosave on your device, pages you've opened still load without a connection, and posts made offline send themselves when you're back
