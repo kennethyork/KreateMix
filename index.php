@@ -81,9 +81,30 @@ function abs_url(string $path = '', array $query = []): string
     return $u;
 }
 
+/**
+ * A URL that points straight at index.php with a query string. Used for CSS, JS, icons and media so
+ * they always reach PHP: many servers (CloudPanel's Nginx among them) answer *.css, *.js and image
+ * paths from disk and would never pass /assets/app.css to the app.
+ */
+function entry_url(array $query, bool $absolute = false): string
+{
+    $script = basename(APP_FILE);
+    $base = base_path();
+    if (str_ends_with($base, '/' . $script)) {
+        $base = substr($base, 0, -strlen('/' . $script));
+    }
+    $path = $base . '/' . $script . '?' . http_build_query($query);
+    if (!$absolute) {
+        return $path;
+    }
+    $root = abs_url('');
+    $root = substr($root, 0, strlen($root) - strlen(base_path() . '/'));
+    return $root . $path;
+}
+
 function asset(string $path): string
 {
-    return url('assets/' . ltrim($path, '/')) . '?v=' . App\Assets::version();
+    return entry_url(['asset' => ltrim($path, '/'), 'v' => App\Assets::version()]);
 }
 
 function redirect(string $path, array $query = []): never
@@ -351,7 +372,7 @@ function kv_due(string $key, int $seconds): bool
 function media_url(array|string $m, bool $absolute = false): string
 {
     $key = is_array($m) ? ($m['key'] ?? $m['path']) : $m;
-    return $absolute ? abs_url('f/' . $key) : url('f/' . $key);
+    return entry_url(['file' => $key], $absolute);
 }
 
 /** The command to put in crontab. */
@@ -6285,7 +6306,7 @@ final class WebsitesController
             'from' => $from,
             'to' => $to,
             'r' => $site ? WebAnalytics::report((int) $site['id'], $from, $to, user_tz()) : null,
-            'snippet' => $site ? '<script defer src="' . abs_url('assets/t.js') . '" data-site="' . $site['site_key'] . '"></script>' : '',
+            'snippet' => $site ? '<script defer src="' . entry_url(['asset' => 't.js'], true) . '" data-site="' . $site['site_key'] . '" data-endpoint="' . abs_url('collect') . '"></script>' : '',
         ]);
     }
 
@@ -14032,7 +14053,7 @@ function mc_view_developers_index(array $__vars): void
         <label class="field grow"><span>Token name</span><input type="text" name="name" placeholder="e.g. Zapier, my script" required></label>
         <button class="btn btn-primary" type="submit">Create token</button>
     </form>
-    <p class="muted small">Use a token with Claude or any MCP client at <code class="copy" data-copy><?= e(abs_url('mcp')) ?></code>, or with Looker Studio through the <a href="<?= e(url('looker-studio-connector.gs')) ?>" download>community connector script</a>.</p>
+    <p class="muted small">Use a token with Claude or any MCP client at <code class="copy" data-copy><?= e(abs_url('mcp')) ?></code>, or with Looker Studio through the <a href="<?= e(entry_url(['asset' => 'looker-studio-connector.gs'])) ?>" download="looker-studio-connector.gs">community connector script</a>.</p>
 
     <details class="api-docs">
         <summary>API reference</summary>
@@ -14515,7 +14536,8 @@ $navLink = function (array $item) use ($path): string {
 <title><?= e(($title ? $title . ' · ' : '') . App\Config::get('app_name', 'MixCreate')) ?></title>
 <link rel="icon" href="<?= e(asset('favicon.svg')) ?>" type="image/svg+xml">
 <link rel="stylesheet" href="<?= e(asset('app.css')) ?>">
-<link rel="manifest" href="<?= e(url('manifest.webmanifest')) ?>">
+<link rel="manifest" href="<?= e(entry_url(['asset' => 'manifest.webmanifest'])) ?>">
+<meta name="mc-sw" content="<?= e(entry_url(['asset' => 'sw.js'])) ?>">
 <link rel="apple-touch-icon" href="<?= e(asset('icon-192.png')) ?>">
 <meta name="theme-color" content="#4f46e5">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17918,8 +17940,8 @@ MC_ASSET_1],
 
 
     /* ---------- Installable app & push notifications ---------- */
-    if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
-        navigator.serviceWorker.register(base + '/sw.js', { scope: base + '/' }).catch(() => {});
+    if ('serviceWorker' in navigator && $('meta[name="mc-sw"]') && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+        navigator.serviceWorker.register($('meta[name="mc-sw"]').content, { scope: base + '/' }).catch(() => {});
     }
     let installPrompt = null;
     window.addEventListener('beforeinstallprompt', (e) => {
@@ -18608,9 +18630,9 @@ MC_ASSET_5],
     "background_color": "#f6f7f9",
     "theme_color": "#4f46e5",
     "icons": [
-        { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png" },
-        { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png" },
-        { "src": "assets/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+        { "src": "index.php?asset=icon-192.png", "sizes": "192x192", "type": "image/png" },
+        { "src": "index.php?asset=icon-512.png", "sizes": "512x512", "type": "image/png" },
+        { "src": "index.php?asset=icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
     ],
     "shortcuts": [
         { "name": "New post", "url": "./posts/new" },
@@ -18627,10 +18649,10 @@ MC_ASSET_6],
 MC_ASSET_7],
         'sw.js' => [false, <<<'MC_ASSET_8'
 /* MixCreate service worker: offline pages, cached assets and push notifications. */
-const STATIC = 'mixcreate-static-v2';
+const STATIC = 'mixcreate-static-v3';
 const PAGES = 'mixcreate-pages';
 const SCOPE = new URL(self.registration.scope);
-const OFFLINE = new URL('offline.html', SCOPE).toString();
+const OFFLINE = new URL(self.location.pathname + '?asset=offline.html', self.location.origin).toString();
 const MAX_PAGES = 80;
 // Pages that are never saved for offline use.
 const SKIP = /^(logout|login|setup|invite|password|r\/|b\/|cron|mcp|collect|api\/|drive\/|canva\/|accounts\/(connect|callback)|ads\/(connect|callback)|reports\/(pdf|pptx)|import\/sample)/;
@@ -18675,14 +18697,14 @@ self.addEventListener('fetch', (e) => {
     }
 
     // Styles, scripts and icons: serve the saved copy, refresh it in the background.
-    if (rel.startsWith('assets/')) {
+    if (url.searchParams.has('asset') && !['sw.js', 'manifest.webmanifest'].includes(url.searchParams.get('asset'))) {
         e.respondWith((async () => {
             const cache = await caches.open(STATIC);
             const hit = await cache.match(req);
             const net = fetch(req).then(async (res) => {
                 if (res.ok) {
                     // Assets are versioned (?v=…): drop older copies of the same file.
-                    for (const k of await cache.keys()) if (new URL(k.url).pathname === url.pathname && k.url !== req.url) cache.delete(k);
+                    for (const k of await cache.keys()) if (new URL(k.url).searchParams.get('asset') === url.searchParams.get('asset') && k.url !== req.url) cache.delete(k);
                     cache.put(req, res.clone());
                 }
                 return res;
@@ -18698,8 +18720,8 @@ self.addEventListener('push', (e) => {
     try { data = e.data ? e.data.json() : {}; } catch (err) { data = { title: 'MixCreate', body: e.data ? e.data.text() : '' }; }
     e.waitUntil(self.registration.showNotification(data.title || 'MixCreate', {
         body: data.body || '',
-        icon: new URL('assets/icon-192.png', self.registration.scope).toString(),
-        badge: new URL('assets/icon-192.png', self.registration.scope).toString(),
+        icon: new URL(self.location.pathname + '?asset=icon-192.png', self.location.origin).toString(),
+        badge: new URL(self.location.pathname + '?asset=icon-192.png', self.location.origin).toString(),
         tag: data.tag,
         data: { url: data.url || self.registration.scope },
     }));
@@ -18722,7 +18744,7 @@ MC_ASSET_8],
     var s = document.currentScript;
     if (!s || navigator.doNotTrack === '1' || /bot|crawl|spider|headless/i.test(navigator.userAgent)) return;
     var site = s.getAttribute('data-site');
-    var endpoint = s.src.replace(/\/assets\/t\.js.*$/, '/collect');
+    var endpoint = s.getAttribute('data-endpoint') || s.src.replace(/\/assets\/t\.js.*$/, '/collect');
     var pid, start;
     function send(data) {
         var body = JSON.stringify(data);
@@ -18766,7 +18788,7 @@ MC_ASSET_9],
 
     public static function version(): string
     {
-        return 'c5d8d705a1';
+        return 'b11d1cb1e4';
     }
 
     /** Serves an asset with long caching (URLs carry a version). */
@@ -18788,7 +18810,8 @@ MC_ASSET_9],
             exit;
         }
         if ($name === 'sw.js') {
-            header('Service-Worker-Allowed: ' . (base_path() ?: '') . '/');
+            // Lets the worker (served from index.php?asset=sw.js) control every page of the app.
+            header('Service-Worker-Allowed: ' . rtrim(dirname((string) parse_url(entry_url([]), PHP_URL_PATH)), '/') . '/');
         }
         header('Content-Length: ' . strlen($body));
         echo $body;
@@ -18877,6 +18900,14 @@ if (preg_match('/apache|litespeed/i', $_SERVER['SERVER_SOFTWARE'] ?? '') && !is_
 
 // Static files and stored media need no session.
 $earlyPath = '/' . trim(substr((string) parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH), strlen(base_path())), '/');
+if (in_array($earlyPath, ['/', '/' . basename(APP_FILE)], true)) {
+    if (isset($_GET['asset']) && is_string($_GET['asset'])) {
+        App\Assets::serve($_GET['asset'], !in_array($_GET['asset'], ['sw.js', 'manifest.webmanifest', 'offline.html'], true));
+    }
+    if (isset($_GET['file']) && is_string($_GET['file'])) {
+        App\Blob::serve($_GET['file']);
+    }
+}
 if (preg_match('#^/assets/([\w.-]+)$#', $earlyPath, $em)) {
     App\Assets::serve($em[1]);
 }

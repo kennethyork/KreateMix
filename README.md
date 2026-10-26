@@ -93,6 +93,8 @@ location ~ \.php$ {
 
 Raise `upload_max_filesize` and `post_max_size` in `php.ini` if you post videos.
 
+CSS, JavaScript, icons and uploaded media are served through `index.php?asset=…` and `index.php?file=…`, so server rules that answer `.css`, `.js` and image requests from disk (CloudPanel has one) don't get in the way.
+
 ### Without URL rewriting
 
 If your server can't rewrite URLs, pages still work at `https://your-site/index.php/...`. Set `app_url` to `https://your-site/index.php` in the settings file so every link uses that form.
@@ -155,10 +157,10 @@ Post text is sent to OpenRouter and the model provider you choose. To keep every
 
 ## Website analytics
 
-Add a site under **Website** and paste the snippet before `</head>`:
+Add a site under **Website** and copy the snippet it shows into your site, before `</head>`. It looks like this:
 
 ```html
-<script defer src="https://your-site/assets/t.js" data-site="SITE_KEY"></script>
+<script defer src="https://your-site/index.php?asset=t.js" data-site="SITE_KEY" data-endpoint="https://your-site/collect"></script>
 ```
 
 No cookies are set and no IP addresses are stored; visitors are counted with a salted hash that changes every day. Bots are ignored. Tag your social links with `utm_source`/`utm_campaign` to see campaigns.
@@ -195,7 +197,7 @@ curl -X POST https://your-site/api/v1/posts \
 
 ### Looker Studio
 
-Download the connector script from **API & webhooks** (or `https://your-site/looker-studio-connector.gs`), paste it into a new [Apps Script](https://script.google.com) project, deploy it as a community connector, then enter your site URL and an API token. Every account's daily metrics become a Looker Studio data source.
+Download the connector script from **API & webhooks**, paste it into a new [Apps Script](https://script.google.com) project, deploy it as a community connector, then enter your site URL and an API token. Every account's daily metrics become a Looker Studio data source.
 
 ## MCP server
 
