@@ -43,14 +43,49 @@ function base_path(): string
     } else {
         $script = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '/index.php');
         $uri = (string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+        $dir = rtrim(preg_replace('#/public$#', '', str_replace('\\', '/', dirname($script))), '/');
         if ($script !== '' && str_starts_with($uri, $script)) {
-            // No URL rewriting: pages are addressed as /index.php/path.
+            // Addressed through the file itself: /index.php/path.
             $base = $script;
         } else {
-            $base = rtrim(preg_replace('#/public$#', '', str_replace('\\', '/', dirname($script))), '/');
+            // Clean URLs, unless this server turned out not to rewrite them.
+            $base = url_mode($dir) === 'index' ? $dir . '/' . basename($script) : $dir;
         }
     }
     return $base;
+}
+
+/**
+ * 'pretty' when the web server sends every path to index.php (CloudPanel, Nginx try_files, Apache with
+ * .htaccess), 'index' when it doesn't and pages must be addressed as /index.php/path. Checked once by
+ * asking the server for a made-up path, then remembered.
+ */
+function url_mode(string $dir): string
+{
+    static $mode = null;
+    if ($mode !== null) {
+        return $mode;
+    }
+    $saved = kv_get('urls.mode');
+    $age = kv_age('urls.mode');
+    if ($saved === 'pretty' || ($saved === 'index' && $age !== null && $age < 86400)) {
+        return $mode = $saved;
+    }
+    $mode = 'pretty';
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
+    $host = $_SERVER['HTTP_HOST'] ?? '';
+    if ($host !== '') {
+        try {
+            $r = App\Http::get(($https ? 'https' : 'http') . '://' . $host . $dir . '/mc-url-check', ['timeout' => 4]);
+            if ($r['status'] === 404 && !str_contains((string) $r['body'], 'mixcreate-url-ok')) {
+                $mode = 'index';
+            }
+        } catch (Throwable) {
+            // Can't reach ourselves (firewall, hairpin NAT): keep clean URLs, the usual case.
+        }
+    }
+    kv_set('urls.mode', $mode);
+    return $mode;
 }
 
 function url(string $path = '', array $query = []): string
@@ -147,15 +182,25 @@ function partial(string $template, array $data = []): void
 
 function json_response(mixed $data, int $status = 200): never
 {
-    http_response_code($status);
+    set_status($status);
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     exit;
 }
 
+/** Sets the status code. 419 gets an explicit status line: Apache turns status codes it doesn't know into 500. */
+function set_status(int $code): void
+{
+    if ($code === 419 && !headers_sent()) {
+        header(($_SERVER['SERVER_PROTOCOL'] ?? 'HTTP/1.1') . ' 419 Page Expired', true, 419);
+        return;
+    }
+    http_response_code($code);
+}
+
 function abort(int $code, string $message = ''): never
 {
-    http_response_code($code);
+    set_status($code);
     $messages = [403 => 'You do not have access to this.', 404 => 'Page not found.', 419 => 'Your session expired. Go back and try again.'];
     $message = $message !== '' ? $message : ($messages[$code] ?? 'Something went wrong.');
     if (wants_json()) {
@@ -379,6 +424,20 @@ function media_url(array|string $m, bool $absolute = false): string
 function cron_command(): string
 {
     return 'php ' . APP_FILE . ' cron';
+}
+
+/** The Authorization request header. Some Apache setups hide it from $_SERVER, so ask the server directly too. */
+function authorization_header(): string
+{
+    $h = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+    if ($h === '' && function_exists('getallheaders')) {
+        foreach ((array) getallheaders() as $k => $v) {
+            if (strcasecmp((string) $k, 'Authorization') === 0) {
+                return (string) $v;
+            }
+        }
+    }
+    return (string) $h;
 }
 
 }
@@ -2941,7 +3000,7 @@ final class ApiController
     public function __construct()
     {
         header('Content-Type: application/json; charset=utf-8');
-        $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+        $auth = authorization_header();
         // ?api_token= is accepted for tools that can't send headers (Google Sheets IMPORTDATA, Looker Studio).
         if (!preg_match('/^Bearer\s+(\S+)$/i', $auth, $m) && !(is_string($_GET['api_token'] ?? null) && preg_match('/^(mc_[0-9a-f]+)$/', $_GET['api_token'], $m))) {
             json_response(['error' => 'Missing bearer token.'], 401);
@@ -4990,7 +5049,7 @@ final class McpController
             http_response_code(405);
             exit;
         }
-        $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+        $auth = authorization_header();
         $row = preg_match('/^Bearer\s+(\S+)$/i', $auth, $m) ? Db::one(
             'SELECT t.id AS token_id, t.workspace_id, u.*, wu.role FROM api_tokens t JOIN users u ON u.id = t.user_id
              JOIN workspace_user wu ON wu.user_id = t.user_id AND wu.workspace_id = t.workspace_id WHERE t.token = ?',
@@ -18896,6 +18955,12 @@ if (PHP_SAPI === 'cli') {
 // On Apache, add the URL rewriting rules once so pages have clean addresses.
 if (preg_match('/apache|litespeed/i', $_SERVER['SERVER_SOFTWARE'] ?? '') && !is_file(BASE_PATH . '/.htaccess') && is_writable(BASE_PATH)) {
     @file_put_contents(BASE_PATH . '/.htaccess', "# Added by MixCreate: send every request to index.php.\nDirectoryIndex index.php\n<IfModule mod_rewrite.c>\n    RewriteEngine On\n    RewriteCond %{HTTP:Authorization} .\n    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]\n    RewriteCond %{REQUEST_FILENAME} !-f\n    RewriteRule ^ index.php [L]\n</IfModule>\n");
+}
+
+// Answers the clean-URL check (see url_mode()) before anything that depends on it.
+if (str_ends_with((string) parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH), '/mc-url-check')) {
+    header('Content-Type: text/plain');
+    exit('mixcreate-url-ok');
 }
 
 // Static files and stored media need no session.

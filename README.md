@@ -97,7 +97,7 @@ CSS, JavaScript, icons and uploaded media are served through `index.php?asset=â€
 
 ### Without URL rewriting
 
-If your server can't rewrite URLs, pages still work at `https://your-site/index.php/...`. Set `app_url` to `https://your-site/index.php` in the settings file so every link uses that form.
+If your server can't rewrite URLs, MixCreate notices on the first visit and addresses pages as `https://your-site/index.php/...` instead. Nothing to configure. If you turn rewriting on later, set `app_url` to your site's address to switch back to clean URLs.
 
 ### Local development
 
