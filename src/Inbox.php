@@ -26,6 +26,7 @@ final class Inbox
             [gmdate('Y-m-d H:i:s', time() - $days * 86400)]
         );
         $providers = [];
+        $perWorkspace = [];
         foreach ($targets as $t) {
             $class = Registry::class($t['provider']);
             if (!$class || !$class::supportsComments()) {
@@ -33,12 +34,19 @@ final class Inbox
             }
             try {
                 $providers[$t['id']] ??= Registry::withFreshToken($t);
-                $new += self::store($t, $providers[$t['id']]->comments($t['provider_post_id']));
+                $added = self::store($t, $providers[$t['id']]->comments($t['provider_post_id']));
+                $new += $added;
+                $perWorkspace[$t['ws']] = ($perWorkspace[$t['ws']] ?? 0) + $added;
             } catch (\Throwable $e) {
                 if ($e instanceof ProviderException && $e->unauthorized) {
                     Db::update('accounts', ['authorized' => 0, 'updated_at' => now()], 'id = ?', [$t['id']]);
                 }
                 log_event('warning', "Inbox fetch failed for account {$t['id']}: " . $e->getMessage());
+            }
+        }
+        foreach ($perWorkspace as $ws => $n) {
+            if ($n > 0) {
+                Notify::users(Notify::workspaceMembers((int) $ws), 'comments', $n === 1 ? 'New comment' : "$n new comments", 'Open the inbox to reply.', '/inbox');
             }
         }
         return $new;

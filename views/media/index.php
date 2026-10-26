@@ -1,25 +1,24 @@
 <?php use App\Workspace; ?>
 <div class="page-head">
     <h1>Media</h1>
-    <?php if (App\Canva::enabled() && Workspace::can('member')): ?>
+    <?php if ((App\Canva::enabled() || App\Drive::enabled()) && Workspace::can('member')): ?>
         <div class="head-actions">
-            <?php if (App\Canva::connected((int) App\Auth::id())): ?>
-                <button class="btn" type="button" data-open-dialog="canva-dialog" data-canva-page><?= icon('palette') ?> Import from Canva</button>
-                <form method="post" action="<?= e(url('/canva/disconnect')) ?>"><?= csrf_field() ?><button class="btn btn-ghost btn-sm" type="submit">Disconnect Canva</button></form>
-            <?php else: ?>
-                <a class="btn" href="<?= e(url('/canva/connect', ['back' => '/media'])) ?>"><?= icon('palette') ?> Connect Canva</a>
-            <?php endif; ?>
+            <?php foreach (['canva' => ['Canva', 'palette', App\Canva::class], 'drive' => ['Google Drive', 'download', App\Drive::class]] as $src => [$label, $ic, $cls]): if (!$cls::enabled()) continue; ?>
+                <?php if ($cls::connected((int) App\Auth::id())): ?>
+                    <button class="btn" type="button" data-open-dialog="cloud-dialog" data-cloud-page="<?= $src ?>"><?= icon($ic) ?> Import from <?= e($label) ?></button>
+                <?php else: ?>
+                    <a class="btn" href="<?= e(url('/' . $src . '/connect', ['back' => '/media'])) ?>"><?= icon($ic) ?> Connect <?= e($label) ?></a>
+                <?php endif; ?>
+            <?php endforeach; ?>
         </div>
     <?php endif; ?>
 </div>
-<?php if (App\Canva::enabled()): ?>
-<dialog id="canva-dialog" class="dialog dialog-wide">
-    <div class="dialog-head"><h2>Import from Canva</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close"><?= icon('x') ?></button></div>
-    <div class="canva-head"><input type="search" id="canva-q" placeholder="Search your Canva designs"></div>
+<dialog id="cloud-dialog" class="dialog dialog-wide">
+    <div class="dialog-head"><h2 id="cloud-title">Import</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close"><?= icon('x') ?></button></div>
+    <div class="canva-head"><input type="search" id="canva-q" placeholder="Search"></div>
     <div class="media-grid" id="canva-grid"><p class="muted">Loading…</p></div>
     <div class="center"><button type="button" class="btn btn-sm" id="canva-more" hidden>Load more</button></div>
 </dialog>
-<?php endif; ?>
 
 <?php if (Workspace::can('member')): ?>
 <form class="dropzone-form" method="post" action="<?= e(url('/media')) ?>" enctype="multipart/form-data" data-media-page>

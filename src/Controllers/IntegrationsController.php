@@ -27,12 +27,12 @@ final class IntegrationsController
         ],
         'ai' => [
             'title' => 'AI writing',
-            'hint' => 'Adds an AI button to the composer. Works with OpenAI, any OpenAI-compatible API (OpenRouter, Groq, a local Ollama or LM Studio server) or Anthropic.',
+            'hint' => 'Adds an AI button to the composer. OpenRouter is recommended: paste your own OpenRouter key and pick any model. If you’ve added your own OpenAI, Anthropic or Google keys in OpenRouter (BYOK), OpenRouter uses them automatically. Workspaces can also use their own OpenRouter key in their settings.',
             'fields' => [
-                'provider' => ['Provider', 'select:openai=OpenAI,openai_compatible=OpenAI-compatible (custom URL),anthropic=Anthropic', false, ''],
-                'base_url' => ['Base URL (OpenAI-compatible only)', 'text', false, 'http://localhost:11434/v1'],
-                'api_key' => ['API key', 'password', true, ''],
-                'model' => ['Model', 'text', false, 'model name from your provider'],
+                'provider' => ['Provider', 'select:openrouter=OpenRouter (recommended),openai=OpenAI,openai_compatible=OpenAI-compatible (custom URL),anthropic=Anthropic', false, ''],
+                'api_key' => ['API key', 'password', true, 'sk-or-v1-…'],
+                'model' => ['Model', 'model', false, 'openrouter/auto'],
+                'base_url' => ['Base URL (custom provider only)', 'text', false, 'http://localhost:11434/v1'],
                 'brand_voice' => ['Brand voice (optional)', 'textarea', false, 'e.g. Friendly and direct, no jargon, light humor'],
             ],
         ],
@@ -44,6 +44,15 @@ final class IntegrationsController
                 'client_secret' => ['Client secret', 'password', true, ''],
             ],
             'callback' => 'canva/callback',
+        ],
+        'gdrive' => [
+            'title' => 'Google Drive',
+            'hint' => 'Lets people import images and videos from their own Google Drive. In Google Cloud Console enable the Google Drive API, create an OAuth web client with the redirect URL below, and add the drive.readonly scope to your consent screen.',
+            'fields' => [
+                'client_id' => ['OAuth client ID', 'text', false, ''],
+                'client_secret' => ['OAuth client secret', 'password', true, ''],
+            ],
+            'callback' => 'drive/callback',
         ],
         'meta_ads' => [
             'title' => 'Meta Ads (Facebook & Instagram)',
@@ -82,7 +91,7 @@ final class IntegrationsController
         foreach (array_keys(self::GROUPS) as $g) {
             $values[$g] = Settings::get($g);
         }
-        view('admin/integrations', ['title' => 'Integrations', 'groups' => self::GROUPS, 'values' => $values]);
+        view('admin/integrations', ['title' => 'Integrations', 'groups' => self::GROUPS, 'values' => $values, 'models' => \App\Ai::openRouterModels()]);
     }
 
     public function save(string $group): void

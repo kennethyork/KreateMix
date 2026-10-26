@@ -173,4 +173,11 @@ final class X extends OAuth2Provider
         $id = (string) ($res['json']['data']['id'] ?? '');
         return ['id' => $id, 'url' => $id ? 'https://x.com/' . ($this->account['username'] ?? 'i') . '/status/' . $id : null];
     }
+
+    public static function supportsFirstComment(): bool { return true; }
+
+    public function firstComment(string $providerPostId, string $text): void
+    {
+        $this->api('POST', self::API . '/tweets', ['json' => ['text' => $text, 'reply' => ['in_reply_to_tweet_id' => $providerPostId]]]);
+    }
 }

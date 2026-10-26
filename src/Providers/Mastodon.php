@@ -182,4 +182,11 @@ final class Mastodon extends OAuth2Provider
         $res = $this->api('POST', $this->base() . '/api/v1/statuses', ['json' => ['status' => $text, 'in_reply_to_id' => $item['provider_item_id'], 'visibility' => 'public']]);
         return ['id' => (string) $res['json']['id'], 'url' => $res['json']['url'] ?? null];
     }
+
+    public static function supportsFirstComment(): bool { return true; }
+
+    public function firstComment(string $providerPostId, string $text): void
+    {
+        $this->api('POST', $this->base() . '/api/v1/statuses', ['json' => ['status' => $text, 'in_reply_to_id' => $providerPostId, 'visibility' => 'public']]);
+    }
 }

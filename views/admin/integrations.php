@@ -27,6 +27,11 @@
                             <?php endforeach; ?>
                         </select>
                     </label>
+                <?php elseif ($type === 'model'): ?>
+                    <label class="field"><span><?= e($label) ?></span>
+                        <input type="text" name="<?= e($f) ?>" value="<?= e($v[$f] ?? '') ?>" placeholder="<?= e($placeholder) ?>" list="openrouter-models" autocomplete="off">
+                        <small class="hint">For OpenRouter, start typing to search <?= count($models) ?: 'its' ?> models, e.g. anthropic/…, openai/…, google/…; <code>openrouter/auto</code> picks one for you.</small>
+                    </label>
                 <?php elseif ($type === 'textarea'): ?>
                     <label class="field" style="flex-basis: 100%"><span><?= e($label) ?></span><textarea name="<?= e($f) ?>" rows="2" placeholder="<?= e($placeholder) ?>"><?= e($v[$f] ?? '') ?></textarea></label>
                 <?php else: ?>
@@ -47,3 +52,10 @@
 </div>
 <form id="test-smtp" method="post" action="<?= e(url('/admin/integrations/smtp/test')) ?>"><?= csrf_field() ?></form>
 <form id="test-ai" method="post" action="<?= e(url('/admin/integrations/ai/test')) ?>"><?= csrf_field() ?></form>
+
+<datalist id="openrouter-models">
+    <option value="openrouter/auto">Auto (OpenRouter picks)</option>
+    <?php foreach ($models as $m): ?>
+        <option value="<?= e($m['id']) ?>"><?= e($m['name'] . ($m['prompt_price'] !== null ? sprintf(' · $%.2f / $%.2f per 1M tokens', $m['prompt_price'], $m['completion_price']) : '')) ?></option>
+    <?php endforeach; ?>
+</datalist>

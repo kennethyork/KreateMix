@@ -43,16 +43,33 @@ final class ReportsController
     public function pdf(): void
     {
         $data = Reports::data(Workspace::id(), $this->params(), user_tz());
-        self::sendPdf($data, Workspace::current()['name'], user_tz());
+        self::sendPdf($data, Workspace::current()['name'], user_tz(), Workspace::id());
     }
 
-    private static function sendPdf(array $data, string $workspace, string $tz): never
+    private static function sendPdf(array $data, string $workspace, string $tz, int $workspaceId): never
     {
-        $pdf = Report::pdf($data['a'], $workspace, $data['scope'], $tz);
+        $pdf = Report::pdf($data['a'], $workspace, $data['scope'], $tz, \App\Branding::for($workspaceId));
         header('Content-Type: application/pdf');
         header('Content-Disposition: attachment; filename="' . Reports::filename($workspace, $data['a']['from'], $data['a']['to']) . '"');
         header('Content-Length: ' . strlen($pdf));
         echo $pdf;
+        exit;
+    }
+
+    public function pptx(): void
+    {
+        $data = Reports::data(Workspace::id(), $this->params(), user_tz());
+        self::sendPptx($data, user_tz(), Workspace::id());
+    }
+
+    private static function sendPptx(array $data, string $tz, int $workspaceId): never
+    {
+        $brand = \App\Branding::for($workspaceId);
+        $bytes = \App\ReportPptx::build($data['a'], $brand, $data['scope'], $tz);
+        header('Content-Type: application/vnd.openxmlformats-officedocument.presentationml.presentation');
+        header('Content-Disposition: attachment; filename="' . preg_replace('/\.pdf$/', '.pptx', Reports::filename($brand['name'], $data['a']['from'], $data['a']['to'])) . '"');
+        header('Content-Length: ' . strlen($bytes));
+        echo $bytes;
         exit;
     }
 
@@ -83,15 +100,19 @@ final class ReportsController
     public function public(string $token): void
     {
         $pdf = str_ends_with($token, '.pdf');
-        $token = preg_replace('/\.pdf$/', '', $token);
+        $pptx = str_ends_with($token, '.pptx');
+        $token = preg_replace('/\.(pdf|pptx)$/', '', $token);
         $share = Db::one('SELECT s.*, w.name AS workspace_name, u.timezone FROM report_shares s JOIN workspaces w ON w.id = s.workspace_id LEFT JOIN users u ON u.id = s.created_by WHERE s.token = ?', [hash('sha256', $token)]);
         if (!$share || ($share['expires_at'] && strtotime($share['expires_at'] . ' UTC') < time())) {
             abort(404, 'This report link is invalid or has expired.');
         }
         $tz = $share['timezone'] ?: 'UTC';
         $data = Reports::data((int) $share['workspace_id'], json_arr($share['params']), $tz);
+        if ($pptx) {
+            self::sendPptx($data, $tz, (int) $share['workspace_id']);
+        }
         if ($pdf) {
-            self::sendPdf($data, $share['workspace_name'], $tz);
+            self::sendPdf($data, $share['workspace_name'], $tz, (int) $share['workspace_id']);
         }
         header('X-Robots-Tag: noindex');
         view('reports/public', [
@@ -100,6 +121,8 @@ final class ReportsController
             'scope' => $data['scope'],
             'workspace' => $share['workspace_name'],
             'pdfUrl' => url('r/' . $token . '.pdf'),
+            'pptxUrl' => url('r/' . $token . '.pptx'),
+            'brand' => \App\Branding::for((int) $share['workspace_id']),
             'tz' => $tz,
         ], null);
     }

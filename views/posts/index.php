@@ -9,7 +9,10 @@ $qs = fn(array $over) => url('/posts', array_filter(array_merge(['status' => $st
 <div class="page-head">
     <h1>Posts</h1>
     <?php if (Workspace::can('member')): ?>
-        <a class="btn btn-primary" href="<?= e(url('/posts/new')) ?>"><?= icon('pen') ?> New post</a>
+        <div class="head-actions">
+            <a class="btn" href="<?= e(url('/import')) ?>"><?= icon('upload') ?> Bulk upload</a>
+            <a class="btn btn-primary" href="<?= e(url('/posts/new')) ?>"><?= icon('pen') ?> New post</a>
+        </div>
     <?php endif; ?>
 </div>
 

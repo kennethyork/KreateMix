@@ -75,7 +75,7 @@ final class Competitors
     }
 
     /** Returns a provider for any authorized account of $provider in the workspace. */
-    private static function borrow(int $workspaceId, string $provider, string $why): array
+    public static function borrow(int $workspaceId, string $provider, string $why): array
     {
         $acc = Db::one('SELECT * FROM accounts WHERE workspace_id = ? AND provider = ? AND authorized = 1 ORDER BY id LIMIT 1', [$workspaceId, $provider]);
         if (!$acc) {

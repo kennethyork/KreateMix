@@ -75,9 +75,10 @@ final class Reports
         $accounts = json_arr($schedule['accounts']);
         $data = self::data((int) $schedule['workspace_id'], ['account' => $accounts[0] ?? 0, 'from' => $from, 'to' => $to], $tz);
         $workspace = $schedule['workspace_name'] ?? (string) Db::value('SELECT name FROM workspaces WHERE id = ?', [$schedule['workspace_id']]);
-        $pdf = Report::pdf($data['a'], $workspace, $data['scope'], $tz);
+        $brand = Branding::for((int) $schedule['workspace_id']);
+        $pdf = Report::pdf($data['a'], $workspace, $data['scope'], $tz, $brand);
         $a = $data['a'];
-        $html = render('reports/email', ['a' => $a, 'workspace' => $workspace, 'scope' => $data['scope'], 'name' => $schedule['name']], null);
+        $html = render('reports/email', ['a' => $a, 'workspace' => $brand['name'], 'scope' => $data['scope'], 'name' => $schedule['name'], 'brand' => $brand], null);
         Mailer::send(
             explode(',', $schedule['recipients']),
             $schedule['name'] . ' · ' . date('M j', strtotime($from)) . '–' . date('M j', strtotime($to)),

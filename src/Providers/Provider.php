@@ -17,6 +17,9 @@ abstract class Provider
      */
     public array $stash = [];
 
+    /** Per-account options for the post being published, e.g. ['type' => 'story']. */
+    public array $options = [];
+
     public function __construct(
         protected array $credentials = [],
         protected ?array $account = null,
@@ -115,6 +118,24 @@ abstract class Provider
     public function audience(): array
     {
         return [];
+    }
+
+    /** Post formats this platform offers, as [key => label]. The first is the default. */
+    public static function postTypes(): array
+    {
+        return ['feed' => 'Post'];
+    }
+
+    /** True when firstComment() is implemented. */
+    public static function supportsFirstComment(): bool
+    {
+        return false;
+    }
+
+    /** Adds a comment under a post we just published (the "first comment"). */
+    public function firstComment(string $providerPostId, string $text): void
+    {
+        throw new ProviderException(static::name() . ' doesn’t support a first comment.');
     }
 
     /** True when comments() and reply() are implemented. */

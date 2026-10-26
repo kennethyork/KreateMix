@@ -9,6 +9,10 @@ foreach ($targets as $t) {
     }
 }
 $targetById = array_column($targets, null, 'account_id');
+$typesById = [];
+foreach ($targets as $t) {
+    $typesById[(int) $t['account_id']] = json_arr($t['options'] ?? '{}')['type'] ?? 'feed';
+}
 $date = $post['scheduled_at'] ? local_time($post['scheduled_at'], 'Y-m-d') : '';
 $time = $post['scheduled_at'] ? local_time($post['scheduled_at'], 'H:i') : '';
 $dis = $readonly ? 'disabled' : '';
@@ -35,6 +39,16 @@ $data = [
         <?php if ($post['id']): ?>
             <div class="head-actions">
                 <?php if (Workspace::can('member')): ?>
+                    <?php if ($autolists): ?>
+                        <details class="dropdown">
+                            <summary class="btn"><?= icon('refresh') ?> Add to autolist</summary>
+                            <div class="dropdown-menu">
+                                <?php foreach ($autolists as $al): ?>
+                                    <button type="submit" form="autolist-form" name="autolist" value="<?= (int) $al['id'] ?>"><strong><?= e($al['name']) ?></strong></button>
+                                <?php endforeach; ?>
+                            </div>
+                        </details>
+                    <?php endif; ?>
                     <button class="btn" type="submit" form="duplicate-form"><?= icon('copy') ?> Duplicate</button>
                 <?php endif; ?>
             </div>
@@ -153,13 +167,25 @@ $data = [
 
                 <div class="media-strip" id="media-strip" data-sortable></div>
 
+                <details class="first-comment" <?= !empty($post['first_comment']) ? 'open' : '' ?>>
+                    <summary>First comment</summary>
+                    <p class="muted small">Posted as a comment right after publishing, on platforms that allow it. Handy for hashtags or links.</p>
+                    <textarea name="first_comment" rows="2" placeholder="#hashtags or a link…" <?= $dis ?>><?= e($post['first_comment'] ?? '') ?></textarea>
+                </details>
+
                 <details class="overrides" id="overrides" <?= $overrides ? 'open' : '' ?>>
-                    <summary>Customize text per account</summary>
-                    <p class="muted small">Leave blank to use the main text.</p>
+                    <summary>Customize per account</summary>
+                    <p class="muted small">Leave text blank to use the main text. Stories use one image or video and ignore text.</p>
                     <div id="override-fields">
                         <?php foreach ($accounts as $a): ?>
                             <label class="field override" data-override-for="<?= (int) $a['id'] ?>" <?= in_array((int) $a['id'], $selected, true) ? '' : 'hidden' ?>>
-                                <span><?= account_avatar($a, 'xs') ?> <?= e($a['name']) ?> <small class="muted counter-inline" data-override-count></small></span>
+                                <span><?= account_avatar($a, 'xs') ?> <?= e($a['name']) ?> <small class="muted counter-inline" data-override-count></small>
+                                    <?php $ptypes = $providers[$a['provider']]['types'] ?? []; if (count($ptypes) > 1): ?>
+                                        <select class="type-select" name="types[<?= (int) $a['id'] ?>]" aria-label="Post type for <?= e($a['name']) ?>" <?= $dis ?>>
+                                            <?php foreach ($ptypes as $tk => $tl): ?><option value="<?= e($tk) ?>" <?= ($typesById[(int) $a['id']] ?? 'feed') === $tk ? 'selected' : '' ?>><?= e($tl) ?></option><?php endforeach; ?>
+                                        </select>
+                                    <?php endif; ?>
+                                </span>
                                 <textarea name="overrides[<?= (int) $a['id'] ?>]" rows="3" <?= $dis ?>><?= e($overrides[(int) $a['id']] ?? '') ?></textarea>
                             </label>
                         <?php endforeach; ?>
@@ -242,6 +268,7 @@ $data = [
 <?php if ($post['id']): ?>
     <form id="delete-form" method="post" action="<?= e(url('/posts/' . $post['id'] . '/delete')) ?>" data-confirm="Delete this post? Anything already published stays on the platforms."><?= csrf_field() ?></form>
     <form id="duplicate-form" method="post" action="<?= e(url('/posts/' . $post['id'] . '/duplicate')) ?>"><?= csrf_field() ?></form>
+    <form id="autolist-form" method="post" action="<?= e(url('/posts/' . $post['id'] . '/autolist')) ?>"><?= csrf_field() ?></form>
     <form id="retry-form" method="post" action="<?= e(url('/posts/' . $post['id'] . '/retry')) ?>"><?= csrf_field() ?></form>
 <?php endif; ?>
 
@@ -275,12 +302,13 @@ $data = [
         <small class="muted">JPG, PNG, GIF, WebP, MP4, MOV, WebM</small>
     </label>
     <div class="upload-progress" id="upload-progress"></div>
-    <?php if ($canvaEnabled): ?>
+    <?php if ($canvaEnabled || $driveEnabled): ?>
         <div class="canva-bar">
-            <button type="button" class="btn btn-sm" data-canva-open><?= icon('palette') ?> Import from Canva</button>
+            <?php if ($canvaEnabled): ?><button type="button" class="btn btn-sm" data-cloud-open="canva"><?= icon('palette') ?> Import from Canva</button><?php endif; ?>
+            <?php if ($driveEnabled): ?><button type="button" class="btn btn-sm" data-cloud-open="drive"><?= icon('download') ?> Import from Google Drive</button><?php endif; ?>
         </div>
         <div class="canva-panel" id="canva-panel" hidden>
-            <div class="canva-head"><input type="search" id="canva-q" placeholder="Search your Canva designs"><button type="button" class="btn btn-sm" data-canva-close>Back to library</button></div>
+            <div class="canva-head"><input type="search" id="canva-q" placeholder="Search"><button type="button" class="btn btn-sm" data-canva-close>Back to library</button></div>
             <div class="media-grid" id="canva-grid"></div>
             <div class="center"><button type="button" class="btn btn-sm" id="canva-more" hidden>Load more</button></div>
         </div>

@@ -294,4 +294,23 @@ final class Bluesky extends Provider
         $rkey = substr($res['uri'], strrpos($res['uri'], '/') + 1);
         return ['id' => $res['uri'], 'url' => 'https://bsky.app/profile/' . $s['handle'] . '/post/' . $rkey];
     }
+
+    public static function supportsFirstComment(): bool { return true; }
+
+    public function firstComment(string $providerPostId, string $text): void
+    {
+        $p = Http::get(self::PUBLIC_API . '/xrpc/app.bsky.feed.getPosts', ['query' => ['uris' => $providerPostId]])['json']['posts'][0] ?? null;
+        $cid = $p['cid'] ?? null;
+        if (!$cid) {
+            // Freshly created posts can take a moment to appear in the AppView; read the record from the PDS.
+            $parts = explode('/', substr($providerPostId, 5));
+            $rec = $this->xrpc('GET', 'com.atproto.repo.getRecord', ['query' => ['repo' => $parts[0], 'collection' => $parts[1], 'rkey' => $parts[2]]]);
+            $cid = $rec['cid'] ?? null;
+        }
+        if (!$cid) {
+            throw new ProviderException('Bluesky: couldn’t find the post to comment on.');
+        }
+        $ref = json_encode(['uri' => $providerPostId, 'cid' => $cid, 'root_uri' => $providerPostId, 'root_cid' => $cid]);
+        $this->reply(['provider_item_id' => $providerPostId, 'reply_ref' => $ref], $text);
+    }
 }

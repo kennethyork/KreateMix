@@ -216,4 +216,14 @@ final class LinkedIn extends OAuth2Provider
             'replies' => (int) ($r['commentsSummary']['aggregatedTotalComments'] ?? 0),
         ];
     }
+
+    public static function supportsFirstComment(): bool { return true; }
+
+    public function firstComment(string $providerPostId, string $text): void
+    {
+        $this->api('POST', self::REST . '/socialActions/' . rawurlencode($providerPostId) . '/comments', [
+            'json' => ['actor' => $this->urn(), 'object' => $providerPostId, 'message' => ['text' => $text]],
+            'headers' => $this->headers(),
+        ]);
+    }
 }

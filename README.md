@@ -5,21 +5,29 @@ Self-hosted social media scheduling, written in plain PHP, HTML, CSS and JavaScr
 ## Features
 
 - **Composer** — one post to many accounts, per-account text, media with drag-to-reorder, live previews, per-platform character counters, paste images straight in
+- **Post types** — feed posts, Facebook and Instagram Stories, and an automatic **first comment** (Facebook, Instagram, LinkedIn)
 - **Scheduling** — month and week calendar, publish now, retries that skip accounts already posted to
+- **Autolists** — evergreen queues that publish the next item at set days and times, in order or shuffled, looping when they reach the end
+- **Bulk import** — schedule many posts at once from a CSV (preview and fix errors before anything is saved)
 - **Workspaces** — one per brand or client, each with its own accounts, posts, media and team
 - **Teams** — admin, member and viewer roles, invite links (no mail server needed)
 - **Approvals** — optionally require an admin to approve members' posts
 - **Library** — templates, hashtag groups, `{{variables}}`, tags
 - **Analytics** — followers, engagement rate, impressions, per-network and per-account breakdowns, formats and hashtags that perform, top posts, audience demographics (Instagram, Threads)
 - **Best time to post** — a day × hour heatmap from your own engagement, with one-click suggestions in the composer
-- **Reports** — PDF download, client share links (no login), and weekly or monthly reports emailed with the PDF attached
+- **Reports** — PDF and PowerPoint downloads, client share links (no login), weekly or monthly reports emailed with the PDF attached, and white-label branding per workspace (logo, color, footer)
+- **Website analytics** — a cookieless tracking snippet: visitors, pages, referrers, UTM campaigns, devices, and how much traffic comes from social
+- **Hashtag tracker** — follow a hashtag on Mastodon, Bluesky, X and Instagram: posts, reach, top posts and the people using it
 - **Competitors** — track public accounts on X, Bluesky, Mastodon, Instagram and YouTube: followers, growth, posting frequency, average engagement
 - **Inbox** — comments on your posts from X, Mastodon, Bluesky, Facebook, Instagram, Threads and YouTube, with replies sent from MixCreate
 - **Link in bio** — a public page per workspace with links, social icons, a recent-posts grid and click tracking
 - **Ads** — spend, impressions, clicks, CTR, CPC and conversions from Meta, Google and TikTok ad accounts
-- **AI writing** — write, rewrite, shorten, add hashtags or get variations, using OpenAI, any OpenAI-compatible server (including local Ollama or LM Studio) or Anthropic
-- **Canva** — import designs straight into the media library
-- **REST API** — bearer tokens; create, schedule, approve posts and upload media
+- **AI writing** — write, rewrite, shorten, add hashtags or get variations. Bring your own [OpenRouter](https://openrouter.ai) key to use any major model; each workspace can use its own key. OpenAI, Anthropic and OpenAI-compatible servers (Ollama, LM Studio) work too
+- **Canva and Google Drive** — import designs and files straight into the media library
+- **REST API** — bearer tokens; create, schedule, approve posts, upload media, export analytics (JSON or CSV)
+- **MCP server** — let Claude or any MCP client draft posts, read analytics and answer comments
+- **Looker Studio** — a community connector for your analytics
+- **Push notifications** — failed posts, approvals, new comments; installable as an app on phone and desktop
 - **Webhooks** — signed with HMAC-SHA256, retried with backoff
 - **Platforms** — X, Mastodon, Bluesky, Facebook Pages, Instagram, LinkedIn, YouTube, Threads, TikTok, Pinterest, Google Business Profile
 - Dark mode, mobile layout, encrypted tokens at rest
@@ -45,7 +53,7 @@ Self-hosted social media scheduling, written in plain PHP, HTML, CSS and JavaScr
 
    No cron access? Call `https://your-site/cron?key=CRON_KEY` every minute from any uptime or cron service. `CRON_KEY` is in `config.php`.
 
-6. Optional: under **Integrations**, add a mail server (for emailed reports), an AI provider, Canva, and ads platform keys.
+6. Optional: under **Integrations**, add a mail server (for emailed reports), an OpenRouter key for AI, Canva, Google Drive and ads platform keys.
 7. As the admin, open **Platform API keys** and add keys for the platforms you want. Each one shows the callback URL to register with the platform. Mastodon and Bluesky need no keys.
 
 ### Nginx
@@ -110,7 +118,31 @@ Facebook, Instagram, Threads, TikTok photos and Google Business fetch media from
 - **Inbox** covers comments and replies, not direct messages; DM access needs separate app reviews on every platform. X comment search needs an API plan that includes recent search.
 - **Competitors**: X, Instagram and YouTube lookups borrow one of the workspace's connected accounts on that network. Instagram needs a connected Facebook Page that is linked to an Instagram business account.
 - **Ads**: Google Ads needs a developer token; Meta needs the `ads_read` permission; TikTok needs a TikTok for Business developer app.
-- **AI** sends post text to the provider you configure. Point it at a local Ollama or LM Studio server to keep everything on your own hardware.
+- **Google Drive** uses a Google OAuth client (it can be the same one as YouTube) with the Drive API enabled. Register the redirect URL shown under Integrations. Access is read-only.
+- **Hashtags**: Mastodon and Bluesky need nothing; X needs a connected X account on an API plan that includes recent search; Instagram needs a connected Instagram business account (Instagram limits you to 30 hashtags a week). The tracker refreshes every 30 minutes.
+- **Push notifications** need HTTPS. On iPhone, add MixCreate to the Home Screen first and turn notifications on from the app. Each person picks which events they get under **Profile**.
+
+## AI (OpenRouter, bring your own key)
+
+1. Create a key at [openrouter.ai/keys](https://openrouter.ai/keys) and add credits, or link your own OpenAI/Anthropic/Google keys there.
+2. As admin, open **Integrations → AI**, leave the provider on **OpenRouter**, paste the key and pick a model (start typing to search the list, or use `openrouter/auto`). Press **Test**.
+3. To bill a client's usage to their own account, open that workspace's **Settings → AI writing** and add their key. A workspace key always overrides the instance key. You can also set a model and brand voice per workspace.
+
+Post text is sent to OpenRouter and the model provider you choose. To keep everything on your own hardware, switch the provider to **OpenAI-compatible** and point it at a local Ollama or LM Studio server.
+
+## Website analytics
+
+Add a site under **Website** and paste the snippet before `</head>`:
+
+```html
+<script defer src="https://your-site/assets/t.js" data-site="SITE_KEY"></script>
+```
+
+No cookies are set and no IP addresses are stored; visitors are counted with a salted hash that changes every day. Bots are ignored. Tag your social links with `utm_source`/`utm_campaign` to see campaigns.
+
+## Bulk import (CSV)
+
+Download the sample from **Import**. Columns: `date`, `time`, `text`, `accounts`, `media`, `first_comment`, `tags`, `status`. Only `text` is required. `accounts` takes account names, `@handles` or network names separated by `;` or `|` (or `all`); `media` takes media library IDs or image URLs; `status` is `schedule` or `draft`. The file can use commas or semicolons as separators.
 
 ## REST API
 
@@ -134,8 +166,23 @@ curl -X POST https://your-site/api/v1/posts \
 | GET / PUT / DELETE | `/api/v1/posts/{id}` | read / update / delete |
 | POST | `/api/v1/posts/{id}/approve` | approve (admins) |
 | POST | `/api/v1/posts/{id}/reject` | send back with `{"note": "..."}` (admins) |
+| GET | `/api/v1/analytics?days=30&format=json\|csv` | daily followers, posts, engagement and impressions per account |
 
-`action` is `draft`, `schedule` or `now`.
+`action` is `draft`, `schedule` or `now`. Where a header can't be set, pass the token as `?api_token=`.
+
+### Looker Studio
+
+Paste `docs/looker-studio-connector.gs` into a new [Apps Script](https://script.google.com) project, deploy it as a community connector, then enter your site URL and an API token. Every account's daily metrics become a Looker Studio data source.
+
+## MCP server
+
+MixCreate is an MCP server at `https://your-site/mcp` (Streamable HTTP). Authenticate with an API token as `Authorization: Bearer mc_...`. Tools: `list_accounts`, `list_posts`, `get_post`, `create_post`, `get_analytics`, `list_inbox`, `reply_to_comment`. For Claude Code:
+
+```
+claude mcp add --transport http mixcreate https://your-site/mcp --header "Authorization: Bearer mc_..."
+```
+
+Posts created through MCP follow the same approval rules as the token's owner.
 
 ## Webhooks
 

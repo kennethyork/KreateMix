@@ -92,6 +92,9 @@ final class Facebook extends OAuth2Provider
     public function publish(string $text, array $media): array
     {
         $pageId = $this->account['provider_id'];
+        if (($this->options['type'] ?? 'feed') === 'story') {
+            return $this->publishStory($pageId, $media);
+        }
         $videos = array_values(array_filter($media, [MediaTools::class, 'isVideo']));
         $images = array_values(array_filter($media, fn($m) => !MediaTools::isVideo($m)));
 
@@ -116,6 +119,27 @@ final class Facebook extends OAuth2Provider
         $r = $this->graph('POST', "/$pageId/feed", $params);
         $id = (string) $r['id'];
         return ['id' => $id, 'url' => 'https://www.facebook.com/' . $id];
+    }
+
+    private function publishStory(string $pageId, array $media): array
+    {
+        if (!$media) {
+            throw new ProviderException('Facebook stories need an image or video.');
+        }
+        $m = $media[0];
+        MediaTools::assertPublicUrl($m['url'], 'Facebook');
+        if (MediaTools::isVideo($m)) {
+            $start = $this->graph('POST', "/$pageId/video_stories", ['upload_phase' => 'start']);
+            $up = Http::post($start['upload_url'], ['headers' => ['Authorization' => 'OAuth ' . $this->accessToken(), 'file_url' => $m['url']], 'timeout' => 300]);
+            if (!Http::ok($up)) {
+                throw new ProviderException('Facebook story upload failed: ' . $this->errorMessage($up));
+            }
+            $r = $this->graph('POST', "/$pageId/video_stories", ['upload_phase' => 'finish', 'video_id' => $start['video_id']]);
+            return ['id' => (string) ($r['post_id'] ?? $start['video_id']), 'url' => null];
+        }
+        $photo = $this->graph('POST', "/$pageId/photos", ['url' => $m['url'], 'published' => 'false']);
+        $r = $this->graph('POST', "/$pageId/photo_stories", ['photo_id' => $photo['id']]);
+        return ['id' => (string) ($r['post_id'] ?? $photo['id']), 'url' => null];
     }
 
     public function accountMetrics(): array
@@ -161,5 +185,17 @@ final class Facebook extends OAuth2Provider
     {
         $r = $this->graph('POST', '/' . $item['provider_item_id'] . '/comments', ['message' => $text]);
         return ['id' => (string) $r['id'], 'url' => null];
+    }
+
+    public static function supportsFirstComment(): bool { return true; }
+
+    public function firstComment(string $providerPostId, string $text): void
+    {
+        $this->graph('POST', '/' . $providerPostId . '/comments', ['message' => $text]);
+    }
+
+    public static function postTypes(): array
+    {
+        return ['feed' => 'Post', 'story' => 'Story'];
     }
 }

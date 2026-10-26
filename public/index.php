@@ -4,6 +4,13 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 
 use App\Controllers\AccountsController;
+use App\Controllers\AutolistsController;
+use App\Controllers\DriveController;
+use App\Controllers\HashtagsController;
+use App\Controllers\ImportController;
+use App\Controllers\McpController;
+use App\Controllers\PushController;
+use App\Controllers\WebsitesController;
 use App\Controllers\AdsController;
 use App\Controllers\AiController;
 use App\Controllers\BioController;
@@ -37,6 +44,18 @@ if (PHP_SAPI === 'cli-server') {
     if ($file !== __DIR__ . '/' && is_file($file)) {
         return false;
     }
+}
+
+// The analytics beacon is high volume and anonymous: answer it before sessions start.
+$earlyPath = rtrim((string) parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH), '/');
+if ($earlyPath === base_path() . '/collect') {
+    (new App\Controllers\WebsitesController())->collect();
+}
+// MCP clients authenticate with API tokens; no session or CSRF.
+if ($earlyPath === base_path() . '/mcp') {
+    App\Hooks::loadModules();
+    (new App\Controllers\McpController())->handle();
+    exit;
 }
 
 $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
@@ -73,6 +92,7 @@ $r->post('/invite/{token}', [AuthController::class, 'acceptInvite']);
 $r->post('/logout', [AuthController::class, 'logout'], ['auth']);
 
 $r->get('/cron', [CronController::class, 'run']);
+$r->options('/collect', [WebsitesController::class, 'collect']);
 
 // Public pages: shared reports and link-in-bio.
 $r->get('/r/{token}', [ReportsController::class, 'public']);
@@ -86,6 +106,11 @@ $r->group(['auth'], function (Router $r) {
     $r->get('/profile', [ProfileController::class, 'edit']);
     $r->post('/profile', [ProfileController::class, 'update']);
     $r->post('/profile/password', [ProfileController::class, 'password']);
+    $r->get('/push/key', [PushController::class, 'key']);
+    $r->post('/push/subscribe', [PushController::class, 'subscribe']);
+    $r->post('/push/unsubscribe', [PushController::class, 'unsubscribe']);
+    $r->post('/push/test', [PushController::class, 'test']);
+    $r->post('/push/preferences', [PushController::class, 'preferences']);
 
     $r->group(['admin'], function (Router $r) {
         $r->get('/admin/services', [ServicesController::class, 'index']);
@@ -110,6 +135,39 @@ $r->group(['auth'], function (Router $r) {
         $r->post('/posts/{id}/delete', [PostsController::class, 'delete'], ['role:member']);
         $r->post('/posts/{id}/duplicate', [PostsController::class, 'duplicate'], ['role:member']);
         $r->post('/posts/{id}/retry', [PostsController::class, 'retry'], ['role:member']);
+        $r->post('/posts/{id}/autolist', [AutolistsController::class, 'addPost'], ['role:member']);
+
+        $r->get('/import', [ImportController::class, 'form'], ['role:member']);
+        $r->get('/import/sample', [ImportController::class, 'sample'], ['role:member']);
+        $r->post('/import', [ImportController::class, 'upload'], ['role:member']);
+        $r->post('/import/confirm', [ImportController::class, 'confirm'], ['role:member']);
+        $r->post('/import/cancel', [ImportController::class, 'cancel'], ['role:member']);
+
+        $r->get('/autolists', [AutolistsController::class, 'index']);
+        $r->post('/autolists', [AutolistsController::class, 'store'], ['role:member']);
+        $r->get('/autolists/{id}', [AutolistsController::class, 'show']);
+        $r->post('/autolists/{id}', [AutolistsController::class, 'update'], ['role:member']);
+        $r->post('/autolists/{id}/delete', [AutolistsController::class, 'delete'], ['role:member']);
+        $r->post('/autolists/{id}/items', [AutolistsController::class, 'addItem'], ['role:member']);
+        $r->post('/autolists/{id}/items/{item}/delete', [AutolistsController::class, 'deleteItem'], ['role:member']);
+        $r->post('/autolists/{id}/publish', [AutolistsController::class, 'publishNow'], ['role:member']);
+
+        $r->get('/websites', [WebsitesController::class, 'index']);
+        $r->post('/websites', [WebsitesController::class, 'store'], ['role:admin']);
+        $r->post('/websites/{id}/delete', [WebsitesController::class, 'delete'], ['role:admin']);
+
+        $r->get('/hashtags', [HashtagsController::class, 'index']);
+        $r->post('/hashtags', [HashtagsController::class, 'store'], ['role:member']);
+        $r->post('/hashtags/{id}/toggle', [HashtagsController::class, 'toggle'], ['role:member']);
+        $r->post('/hashtags/{id}/refresh', [HashtagsController::class, 'refresh'], ['role:member']);
+        $r->post('/hashtags/{id}/delete', [HashtagsController::class, 'delete'], ['role:member']);
+        $r->get('/hashtags/{id}/export', [HashtagsController::class, 'export']);
+
+        $r->get('/drive/connect', [DriveController::class, 'connect'], ['role:member']);
+        $r->get('/drive/callback', [DriveController::class, 'callback'], ['role:member']);
+        $r->post('/drive/disconnect', [DriveController::class, 'disconnect']);
+        $r->get('/drive/files', [DriveController::class, 'files'], ['role:member']);
+        $r->post('/drive/import', [DriveController::class, 'import'], ['role:member']);
 
         $r->get('/media', [MediaController::class, 'index']);
         $r->post('/media', [MediaController::class, 'upload'], ['role:member']);
@@ -119,6 +177,7 @@ $r->group(['auth'], function (Router $r) {
 
         $r->get('/reports', [ReportsController::class, 'index']);
         $r->get('/reports/pdf', [ReportsController::class, 'pdf']);
+        $r->get('/reports/pptx', [ReportsController::class, 'pptx']);
         $r->post('/reports/share', [ReportsController::class, 'share'], ['role:member']);
         $r->post('/reports/shares/{id}/revoke', [ReportsController::class, 'revokeShare'], ['role:member']);
         $r->post('/reports/schedules', [ReportsController::class, 'saveSchedule'], ['role:member']);
@@ -188,6 +247,8 @@ $r->group(['auth'], function (Router $r) {
         $r->get('/settings', [WorkspacesController::class, 'edit'], ['role:admin']);
         $r->post('/settings', [WorkspacesController::class, 'update'], ['role:admin']);
         $r->post('/settings/delete', [WorkspacesController::class, 'delete'], ['role:admin']);
+        $r->post('/settings/branding', [WorkspacesController::class, 'branding'], ['role:admin']);
+        $r->post('/settings/ai', [WorkspacesController::class, 'ai'], ['role:admin']);
         $r->get('/members', [MembersController::class, 'index']);
         $r->post('/members/invite', [MembersController::class, 'invite'], ['role:admin']);
         $r->post('/members/{id}/role', [MembersController::class, 'role'], ['role:admin']);
@@ -199,6 +260,7 @@ $r->group(['auth'], function (Router $r) {
 // REST API: bearer-token auth, no session or CSRF.
 $r->group(['no_csrf'], function (Router $r) {
     $r->get('/api/v1/me', [ApiController::class, 'me']);
+    $r->get('/api/v1/analytics', [ApiController::class, 'analytics']);
     $r->get('/api/v1/accounts', [ApiController::class, 'accounts']);
     $r->get('/api/v1/tags', [ApiController::class, 'tags']);
     $r->get('/api/v1/media', [ApiController::class, 'media']);

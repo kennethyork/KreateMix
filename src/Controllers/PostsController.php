@@ -80,7 +80,7 @@ final class PostsController
 
     public function create(): void
     {
-        $post = ['id' => null, 'content' => '', 'media' => '[]', 'status' => 'draft', 'scheduled_at' => null, 'review_note' => null];
+        $post = ['id' => null, 'content' => '', 'media' => '[]', 'status' => 'draft', 'scheduled_at' => null, 'review_note' => null, 'first_comment' => null];
         // Prefill from the calendar ("?date=2026-11-03&time=09:00") or a template.
         $date = (string) input('date', '');
         if ($date !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
@@ -116,7 +116,8 @@ final class PostsController
         if ($old) {
             $post['content'] = $old['content'] ?? $post['content'];
             $post['media'] = json_encode(array_map('intval', $old['media'] ?? []));
-            $targets = array_map(fn($a) => ['account_id' => (int) $a, 'content' => $old['overrides'][$a] ?? null, 'status' => 'pending'], $old['accounts'] ?? []);
+            $targets = array_map(fn($a) => ['account_id' => (int) $a, 'content' => $old['overrides'][$a] ?? null, 'options' => json_encode(['type' => $old['types'][$a] ?? 'feed']), 'status' => 'pending'], $old['accounts'] ?? []);
+            $post['first_comment'] = $old['first_comment'] ?? ($post['first_comment'] ?? null);
             $tagIds = array_map('intval', $old['tags'] ?? []);
             if (!empty($old['date'])) {
                 $post['scheduled_at'] = to_utc(($old['date'] ?? '') . ' ' . ($old['time'] ?? '09:00'));
@@ -125,7 +126,8 @@ final class PostsController
 
         $providers = [];
         foreach (Registry::all() as $key => $class) {
-            $providers[$key] = ['name' => $class::name(), 'color' => $class::color(), 'limit' => $class::textLimit(), 'rules' => $class::mediaRules()];
+            $providers[$key] = ['name' => $class::name(), 'color' => $class::color(), 'limit' => $class::textLimit(), 'rules' => $class::mediaRules(),
+                'types' => $class::postTypes(), 'firstComment' => $class::supportsFirstComment()];
         }
         $ws = Workspace::current();
 
@@ -146,8 +148,10 @@ final class PostsController
             'canApprove' => Workspace::can('admin'),
             'panels' => Hooks::filter('composer.panels', [], $post),
             'bestTimes' => $readonly ? [] : \App\Analytics::bestTimes($wsId, array_map('intval', array_column(self::accounts(), 'id')), user_tz())['top'],
-            'aiEnabled' => \App\Ai::enabled(),
+            'aiEnabled' => \App\Ai::enabled($wsId),
             'canvaEnabled' => \App\Canva::enabled(),
+            'driveEnabled' => \App\Drive::enabled(),
+            'autolists' => Db::all('SELECT id, name FROM autolists WHERE workspace_id = ? ORDER BY name', [$wsId]),
         ]);
     }
 
@@ -181,6 +185,8 @@ final class PostsController
             'media' => (array) input('media', []),
             'tags' => (array) input('tags', []),
             'overrides' => (array) input('overrides', []),
+            'types' => (array) input('types', []),
+            'first_comment' => (string) input('first_comment', ''),
             'scheduled_at' => $scheduledAt,
         ];
         $result = PostService::save($id, $in, $action, Workspace::id(), (int) Auth::id(), Workspace::can('admin'));
@@ -254,11 +260,12 @@ final class PostsController
                 'user_id' => Auth::id(),
                 'content' => $post['content'],
                 'media' => $post['media'],
+                'first_comment' => $post['first_comment'],
                 'status' => 'draft',
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
-            Db::query("INSERT INTO post_accounts (post_id, account_id, content, status) SELECT ?, account_id, content, 'pending' FROM post_accounts WHERE post_id = ?", [$newId, $post['id']]);
+            Db::query("INSERT INTO post_accounts (post_id, account_id, content, options, status) SELECT ?, account_id, content, options, 'pending' FROM post_accounts WHERE post_id = ?", [$newId, $post['id']]);
             Db::query('INSERT INTO post_tag (post_id, tag_id) SELECT ?, tag_id FROM post_tag WHERE post_id = ?', [$newId, $post['id']]);
             return $newId;
         });

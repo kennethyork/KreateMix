@@ -56,6 +56,9 @@ final class WorkspacesController
             'workspace' => Workspace::current(),
             'colors' => self::COLORS,
             'tabs' => Hooks::filter('settings.tabs', []),
+            'branding' => \App\Branding::for(Workspace::id()),
+            'aiWs' => \App\Settings::get('ai.ws.' . Workspace::id()) + ['api_key' => null],
+            'models' => \App\Ai::openRouterModels(),
         ]);
     }
 
@@ -74,6 +77,40 @@ final class WorkspacesController
         ], 'id = ?', [Workspace::id()]);
         flash('success', 'Saved.');
         redirect('/settings');
+    }
+
+    public function branding(): void
+    {
+        $logo = (int) input('logo_media_id', 0);
+        if ($logo && !Db::value("SELECT 1 FROM media WHERE id = ? AND workspace_id = ? AND mime LIKE 'image/%'", [$logo, Workspace::id()])) {
+            $logo = 0;
+        }
+        Db::update('workspaces', ['branding' => json_encode([
+            'name' => mb_substr((string) input('brand_name', ''), 0, 80),
+            'color' => preg_match('/^#[0-9a-f]{6}$/i', (string) input('brand_color', '')) ? input('brand_color') : null,
+            'logo_media_id' => $logo ?: null,
+            'footer' => mb_substr((string) input('brand_footer', ''), 0, 120),
+            'hide_powered_by' => (bool) input('hide_powered_by'),
+        ])], 'id = ?', [Workspace::id()]);
+        flash('success', 'Branding saved.');
+        redirect('/settings');
+    }
+
+    public function ai(): void
+    {
+        $group = 'ai.ws.' . Workspace::id();
+        $cur = \App\Settings::get($group);
+        $key = trim((string) input('api_key', ''));
+        if (input('remove_key')) {
+            $cur['api_key'] = null;
+        } elseif ($key !== '') {
+            $cur['api_key'] = $key;
+        }
+        $cur['model'] = mb_substr(trim((string) input('model', '')), 0, 120);
+        $cur['brand_voice'] = mb_substr(trim((string) input('brand_voice', '')), 0, 500);
+        \App\Settings::save($group, $cur);
+        flash('success', 'AI settings saved.');
+        redirect('/settings#ai');
     }
 
     public function delete(): void

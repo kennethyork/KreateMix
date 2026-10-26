@@ -96,4 +96,16 @@ final class Sandbox extends Provider
         file_put_contents(BASE_PATH . '/storage/logs/sandbox.log', sprintf("[%s] reply to %s: %s\n", now(), $item['provider_item_id'], $text), FILE_APPEND);
         return ['id' => 'r-' . bin2hex(random_bytes(4)), 'url' => null];
     }
+
+    public static function supportsFirstComment(): bool { return true; }
+
+    public function firstComment(string $providerPostId, string $text): void
+    {
+        file_put_contents(BASE_PATH . '/storage/logs/sandbox.log', sprintf("[%s] first comment on %s: %s\n", now(), $providerPostId, $text), FILE_APPEND);
+    }
+
+    public static function postTypes(): array
+    {
+        return ['feed' => 'Post', 'story' => 'Story'];
+    }
 }

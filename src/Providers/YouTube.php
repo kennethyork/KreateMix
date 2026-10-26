@@ -140,4 +140,14 @@ final class YouTube extends OAuth2Provider
         $r = $this->api('POST', self::API . '/comments', ['query' => ['part' => 'snippet'], 'json' => ['snippet' => ['parentId' => $item['reply_ref'] ?: $item['provider_item_id'], 'textOriginal' => $text]]])['json'];
         return ['id' => (string) ($r['id'] ?? ''), 'url' => null];
     }
+
+    public static function supportsFirstComment(): bool { return true; }
+
+    public function firstComment(string $providerPostId, string $text): void
+    {
+        $this->api('POST', self::API . '/commentThreads', ['query' => ['part' => 'snippet'], 'json' => ['snippet' => [
+            'videoId' => $providerPostId,
+            'topLevelComment' => ['snippet' => ['textOriginal' => $text]],
+        ]]]);
+    }
 }

@@ -212,4 +212,11 @@ final class Threads extends OAuth2Provider
         $id = (string) $this->graph('POST', "/$uid/threads_publish", ['creation_id' => $container])['id'];
         return ['id' => $id, 'url' => null];
     }
+
+    public static function supportsFirstComment(): bool { return true; }
+
+    public function firstComment(string $providerPostId, string $text): void
+    {
+        $this->reply(['provider_item_id' => $providerPostId], $text);
+    }
 }

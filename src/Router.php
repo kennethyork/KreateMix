@@ -29,6 +29,11 @@ final class Router
         $this->add('DELETE', $path, $handler, $middleware);
     }
 
+    public function options(string $path, array|callable $handler, array $middleware = []): void
+    {
+        $this->add('OPTIONS', $path, $handler, $middleware);
+    }
+
     public function group(array $middleware, callable $define): void
     {
         $prev = $this->groupMiddleware;

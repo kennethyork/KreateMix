@@ -20,7 +20,8 @@ final class ApiController
     {
         header('Content-Type: application/json; charset=utf-8');
         $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
-        if (!preg_match('/^Bearer\s+(\S+)$/i', $auth, $m)) {
+        // ?api_token= is accepted for tools that can't send headers (Google Sheets IMPORTDATA, Looker Studio).
+        if (!preg_match('/^Bearer\s+(\S+)$/i', $auth, $m) && !(is_string($_GET['api_token'] ?? null) && preg_match('/^(mc_[0-9a-f]+)$/', $_GET['api_token'], $m))) {
             json_response(['error' => 'Missing bearer token.'], 401);
         }
         $row = Db::one(
@@ -45,6 +46,67 @@ final class ApiController
         if (($rank[$this->role] ?? 0) < $rank[$min]) {
             json_response(['error' => 'Your role in this workspace doesn’t allow this.'], 403);
         }
+    }
+
+    /**
+     * GET /api/v1/analytics?from=YYYY-MM-DD&to=YYYY-MM-DD&format=json|csv
+     * One row per account per day: followers, posts, likes, comments, shares, impressions, engagement.
+     */
+    public function analytics(): void
+    {
+        $tz = $this->user['timezone'] ?: 'UTC';
+        $to = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) input('to', '')) ? input('to') : (new \DateTimeImmutable('today', new \DateTimeZone($tz)))->format('Y-m-d');
+        $from = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) input('from', '')) ? input('from') : date('Y-m-d', strtotime($to . ' -29 days'));
+        if ($from > $to || (strtotime($to) - strtotime($from)) > 400 * 86400) {
+            json_response(['error' => 'Use a range of up to 400 days.'], 422);
+        }
+        $accounts = Db::all('SELECT id, provider, name FROM accounts WHERE workspace_id = ?', [$this->workspaceId]);
+        $rows = [];
+        foreach ($accounts as $acc) {
+            $followers = array_column(Db::all('SELECT date, followers FROM account_metrics WHERE account_id = ? AND date <= ? AND followers IS NOT NULL ORDER BY date', [$acc['id'], $to]), 'followers', 'date');
+            $posts = Db::all(
+                "SELECT pa.published_at, pm.data FROM post_accounts pa LEFT JOIN post_metrics pm ON pm.post_id = pa.post_id AND pm.account_id = pa.account_id
+                 WHERE pa.account_id = ? AND pa.status = 'published' AND pa.published_at BETWEEN ? AND ?",
+                [$acc['id'], to_utc("$from 00:00", $tz), to_utc("$to 23:59:59", $tz)]
+            );
+            $byDay = [];
+            foreach ($posts as $p) {
+                $d = local_time($p['published_at'], 'Y-m-d', $tz);
+                $m = json_arr($p['data']);
+                $byDay[$d] ??= ['posts' => 0, 'likes' => 0, 'comments' => 0, 'shares' => 0, 'impressions' => 0, 'engagement' => 0];
+                $byDay[$d]['posts']++;
+                $byDay[$d]['likes'] += (int) ($m['likes'] ?? $m['reactions'] ?? 0);
+                $byDay[$d]['comments'] += (int) ($m['replies'] ?? $m['comments'] ?? 0);
+                $byDay[$d]['shares'] += (int) ($m['shares'] ?? $m['reposts'] ?? 0);
+                $byDay[$d]['impressions'] += (int) ($m['impressions'] ?? $m['views'] ?? 0);
+                $byDay[$d]['engagement'] += \App\Metrics::engagement($m);
+            }
+            $last = null;
+            foreach ($followers as $d => $f) {
+                if ($d < $from) {
+                    $last = (int) $f;
+                }
+            }
+            for ($t = strtotime($from); $t <= strtotime($to); $t += 86400) {
+                $d = date('Y-m-d', $t);
+                if (isset($followers[$d])) {
+                    $last = (int) $followers[$d];
+                }
+                $rows[] = ['date' => $d, 'account_id' => (int) $acc['id'], 'account' => $acc['name'], 'network' => $acc['provider'], 'followers' => $last]
+                    + ($byDay[$d] ?? ['posts' => 0, 'likes' => 0, 'comments' => 0, 'shares' => 0, 'impressions' => 0, 'engagement' => 0]);
+            }
+        }
+        if (input('format') === 'csv') {
+            header('Content-Type: text/csv; charset=utf-8');
+            $out = fopen('php://output', 'w');
+            fputcsv($out, ['date', 'account_id', 'account', 'network', 'followers', 'posts', 'likes', 'comments', 'shares', 'impressions', 'engagement']);
+            foreach ($rows as $r) {
+                fputcsv($out, array_values($r));
+            }
+            fclose($out);
+            exit;
+        }
+        json_response(['data' => $rows, 'meta' => ['from' => $from, 'to' => $to, 'timezone' => $tz]]);
     }
 
     public function me(): void
@@ -131,6 +193,8 @@ final class ApiController
             'media' => (array) input('media', []),
             'tags' => (array) input('tags', []),
             'overrides' => (array) input('overrides', []),
+            'types' => (array) input('types', []),
+            'first_comment' => (string) input('first_comment', ''),
             'scheduled_at' => $scheduledAt,
         ];
         $result = PostService::save($id, $in, $action, $this->workspaceId, (int) $this->user['id'], $this->role === 'admin');

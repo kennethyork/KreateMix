@@ -35,12 +35,20 @@ final class PostService
             }
         }
 
+        $types = [];
+        foreach ((array) ($in['types'] ?? []) as $aid => $type) {
+            if (in_array((int) $aid, $accountIds, true) && is_string($type) && $type !== 'feed') {
+                $types[(int) $aid] = $type;
+            }
+        }
+        $firstComment = mb_substr(trim(str_replace("\r\n", "\n", (string) ($in['first_comment'] ?? ''))), 0, 2000);
+
         $scheduledAt = $in['scheduled_at'] ?? null;
         if ($action === 'now') {
             $scheduledAt = now();
         }
 
-        $errors = self::validate($content, $accountIds, $mediaIds, $overrides, $scheduledAt, $action, $workspaceId);
+        $errors = self::validate($content, $accountIds, $mediaIds, $overrides, $scheduledAt, $action, $workspaceId, $types);
         if ($errors) {
             return ['post' => null, 'errors' => $errors];
         }
@@ -52,9 +60,10 @@ final class PostService
         }
         $status = Hooks::filter('post.status', $status, $existing ?? [], $action);
 
-        $id = Db::transaction(function () use ($existing, $workspaceId, $userId, $content, $mediaIds, $status, $scheduledAt, $accountIds, $overrides, $tagIds) {
+        $id = Db::transaction(function () use ($existing, $workspaceId, $userId, $content, $mediaIds, $status, $scheduledAt, $accountIds, $overrides, $tagIds, $types, $firstComment, $in) {
             $row = [
                 'content' => $content,
+                'first_comment' => $firstComment !== '' ? $firstComment : null,
                 'media' => json_encode($mediaIds),
                 'status' => $status,
                 'scheduled_at' => $scheduledAt,
@@ -65,7 +74,7 @@ final class PostService
                 $id = (int) $existing['id'];
                 Db::update('posts', $row, 'id = ?', [$id]);
             } else {
-                $id = Db::insert('posts', $row + ['workspace_id' => $workspaceId, 'user_id' => $userId, 'created_at' => now()]);
+                $id = Db::insert('posts', $row + ['workspace_id' => $workspaceId, 'user_id' => $userId ?: null, 'autolist_id' => $in['autolist_id'] ?? null, 'created_at' => now()]);
             }
             // Keep publish results for accounts that already succeeded (retry after partial failure).
             $keep = Db::all("SELECT account_id FROM post_accounts WHERE post_id = ? AND status = 'published'", [$id]);
@@ -78,7 +87,13 @@ final class PostService
                 if (in_array($aid, $keep, true)) {
                     continue;
                 }
-                Db::insert('post_accounts', ['post_id' => $id, 'account_id' => $aid, 'content' => $overrides[$aid] ?? null, 'status' => 'pending']);
+                Db::insert('post_accounts', [
+                    'post_id' => $id,
+                    'account_id' => $aid,
+                    'content' => $overrides[$aid] ?? null,
+                    'options' => json_encode(isset($types[$aid]) ? ['type' => $types[$aid]] : new \stdClass()),
+                    'status' => 'pending',
+                ]);
             }
             Db::query('DELETE FROM post_tag WHERE post_id = ?', [$id]);
             foreach ($tagIds as $tid) {
@@ -92,13 +107,14 @@ final class PostService
         Webhooks::dispatch($workspaceId, $existing ? 'post.updated' : 'post.created', ['post' => self::toArray($post)]);
         if ($status === 'pending_approval') {
             Webhooks::dispatch($workspaceId, 'post.approval_requested', ['post' => self::toArray($post)]);
+            Notify::users(Notify::workspaceAdmins($workspaceId), 'approvals', 'Post needs approval', str_limit($content !== '' ? $content : '(media)', 120), '/posts/' . $post['id']);
         } elseif ($status === 'scheduled') {
             Webhooks::dispatch($workspaceId, 'post.scheduled', ['post' => self::toArray($post)]);
         }
         return ['post' => $post, 'errors' => []];
     }
 
-    public static function validate(string $content, array $accountIds, array $mediaIds, array $overrides, ?string $scheduledAt, string $action, int $workspaceId): array
+    public static function validate(string $content, array $accountIds, array $mediaIds, array $overrides, ?string $scheduledAt, string $action, int $workspaceId, array $types = []): array
     {
         $errors = [];
         if ($action === 'draft') {
@@ -129,6 +145,15 @@ final class PostService
                 continue;
             }
             $label = $class::name() . ' (' . $a['name'] . ')';
+            $type = $types[(int) $a['id']] ?? 'feed';
+            if ($type !== 'feed') {
+                if (!isset($class::postTypes()[$type])) {
+                    $errors[] = "$label doesn’t support that post type.";
+                } elseif ($type === 'story' && count($media) !== 1) {
+                    $errors[] = "$label: a story needs exactly one image or video.";
+                }
+                continue; // stories skip text and carousel rules
+            }
             $text = Variables::apply($workspaceId, $overrides[(int) $a['id']] ?? $content);
             $limit = $class::textLimit();
             if (self::length($text, $a['provider']) > $limit) {
@@ -237,6 +262,7 @@ final class PostService
             'scheduled_at' => $iso($post['scheduled_at']),
             'published_at' => $iso($post['published_at']),
             'review_note' => $post['review_note'],
+            'first_comment' => $post['first_comment'] ?? null,
             'tags' => array_map(fn($t) => ['id' => (int) $t['id'], 'name' => $t['name'], 'color' => $t['color']], $tags),
             'accounts' => array_map(fn($t) => [
                 'id' => (int) $t['account_id'],
@@ -244,6 +270,7 @@ final class PostService
                 'name' => $t['name'],
                 'username' => $t['username'],
                 'content' => $t['content'],
+                'type' => json_arr($t['options'] ?? '{}')['type'] ?? 'feed',
                 'status' => $t['status'],
                 'url' => $t['url'],
                 'error' => $t['error'],

@@ -95,6 +95,9 @@ final class Instagram extends OAuth2Provider
     public function publish(string $text, array $media): array
     {
         $igId = $this->account['provider_id'];
+        if (($this->options['type'] ?? 'feed') === 'story') {
+            return $this->publishStory($igId, $media);
+        }
         $media = array_slice($media, 0, 10);
         if (!$media) {
             throw new ProviderException('Instagram posts need an image or video.');
@@ -122,6 +125,21 @@ final class Instagram extends OAuth2Provider
         } catch (ProviderException) {
         }
         return ['id' => $id, 'url' => $permalink];
+    }
+
+    /** Stories take one image or video and no caption. */
+    private function publishStory(string $igId, array $media): array
+    {
+        if (!$media) {
+            throw new ProviderException('Instagram stories need an image or video.');
+        }
+        $m = MediaTools::jpeg($media[0], 8 * 1024 * 1024, 1920);
+        MediaTools::assertPublicUrl($m['url'], 'Instagram');
+        $params = ['media_type' => 'STORIES'] + (MediaTools::isVideo($m) ? ['video_url' => $m['url']] : ['image_url' => $m['url']]);
+        $container = (string) $this->graph('POST', "/$igId/media", $params)['id'];
+        $this->waitReady($container);
+        $id = (string) $this->graph('POST', "/$igId/media_publish", ['creation_id' => $container])['id'];
+        return ['id' => $id, 'url' => null];
     }
 
     private function container(string $igId, array $m, array $extra): string
@@ -223,5 +241,17 @@ final class Instagram extends OAuth2Provider
     {
         $r = $this->graph('POST', '/' . $item['provider_item_id'] . '/replies', ['message' => $text]);
         return ['id' => (string) $r['id'], 'url' => null];
+    }
+
+    public static function supportsFirstComment(): bool { return true; }
+
+    public function firstComment(string $providerPostId, string $text): void
+    {
+        $this->graph('POST', '/' . $providerPostId . '/comments', ['message' => $text]);
+    }
+
+    public static function postTypes(): array
+    {
+        return ['feed' => 'Post / Reel', 'story' => 'Story'];
     }
 }

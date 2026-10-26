@@ -236,15 +236,20 @@
 
 
     /* ---------- Canva design browser (composer media dialog and media page) ---------- */
-    function canvaBrowser({ grid, q, more, back, onImport }) {
+    const CLOUD = {
+        canva: { list: '/canva/designs', import: '/canva/import', connect: '/canva/connect', name: 'Canva' },
+        drive: { list: '/drive/files', import: '/drive/import', connect: '/drive/connect', name: 'Google Drive' },
+    };
+    function canvaBrowser({ grid, q, more, back, onImport, source = 'canva' }) {
+        const src = CLOUD[source];
         let continuation = null;
         let timer = null;
         async function load(reset) {
             if (reset) { continuation = null; grid.innerHTML = '<p class="muted">Loading…</p>'; }
             try {
-                const r = await api('/canva/designs' + '?' + new URLSearchParams({ q: q.value, continuation: continuation || '' }));
+                const r = await api(src.list + '?' + new URLSearchParams({ q: q.value, continuation: continuation || '' }));
                 if (!r.connected) {
-                    grid.innerHTML = `<div class="empty-state"><p class="muted">Connect your Canva account to import designs.</p><a class="btn btn-primary" href="${base}/canva/connect?back=${encodeURIComponent(back)}">Connect Canva</a></div>`;
+                    grid.innerHTML = `<div class="empty-state"><p class="muted">Connect your ${src.name} account to import from it.</p><a class="btn btn-primary" href="${base}${src.connect}?back=${encodeURIComponent(back)}">Connect ${src.name}</a></div>`;
                     more.hidden = true;
                     return;
                 }
@@ -259,7 +264,7 @@
                         b.classList.add('busy');
                         b.disabled = true;
                         try {
-                            const res = await api('/canva/import', { method: 'POST', body: { design: d.id, format: 'png', _token: csrf() } });
+                            const res = await api(src.import, { method: 'POST', body: { design: d.id, format: 'png', _token: csrf() } });
                             onImport(res.media);
                         } catch (err) { toast(err.message, 'error'); }
                         b.classList.remove('busy');
@@ -274,27 +279,27 @@
                 grid.innerHTML = `<p class="error-text">${esc(err.message)}</p>`;
             }
         }
-        q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => load(true), 350); });
-        more.addEventListener('click', () => load(false));
+        const onInput = () => { clearTimeout(timer); timer = setTimeout(() => load(true), 350); };
+        const onMore = () => load(false);
+        q.addEventListener('input', onInput);
+        more.addEventListener('click', onMore);
+        q.value = '';
         load(true);
-        return { load };
+        return { destroy: () => { q.removeEventListener('input', onInput); more.removeEventListener('click', onMore); } };
     }
 
-    const canvaPageBtn = $('[data-canva-page]');
-    if (canvaPageBtn) {
-        let started = false;
-        canvaPageBtn.addEventListener('click', () => {
-            if (started) return;
-            started = true;
-            canvaBrowser({ grid: $('#canva-grid'), q: $('#canva-q'), more: $('#canva-more'), back: '/media', onImport: () => location.reload() });
-        });
-    }
-    if (new URLSearchParams(location.search).get('canva') && $('[data-canva-open]')) {
-        // Returning from Canva sign-in: reopen the picker.
-        setTimeout(() => { $('[data-open-media]')?.click(); setTimeout(() => $('[data-canva-open]')?.click(), 300); }, 300);
-    }
-    if (new URLSearchParams(location.search).get('canva') && canvaPageBtn) {
-        setTimeout(() => canvaPageBtn.click(), 200);
+    let pageBrowser = null;
+    $$('[data-cloud-page]').forEach((btn) => btn.addEventListener('click', () => {
+        const source = btn.dataset.cloudPage;
+        $('#cloud-title').textContent = 'Import from ' + CLOUD[source].name;
+        pageBrowser?.destroy();
+        pageBrowser = canvaBrowser({ source, grid: $('#canva-grid'), q: $('#canva-q'), more: $('#canva-more'), back: '/media', onImport: () => location.reload() });
+    }));
+    const params = new URLSearchParams(location.search);
+    const returned = params.get('canva') ? 'canva' : (params.get('drive') ? 'drive' : null);
+    if (returned) {
+        if ($('[data-cloud-page="' + returned + '"]')) setTimeout(() => $('[data-cloud-page="' + returned + '"]').click(), 200);
+        else if ($('[data-cloud-open="' + returned + '"]')) setTimeout(() => { $('[data-open-media]')?.click(); setTimeout(() => $('[data-cloud-open="' + returned + '"]')?.click(), 300); }, 300);
     }
 
     /* ---------- Small helpers for other pages ---------- */
@@ -363,7 +368,8 @@
                     b.innerHTML = `<img src="${esc(m.url)}" alt="" loading="lazy">`;
                     b.addEventListener('click', () => {
                         $('[data-bio-avatar]').value = m.id;
-                        const holder = pickAvatar.parentElement.querySelector('.avatar');
+                        const holder = pickAvatar.closest('.bio-avatar-row').querySelector('.avatar, .logo-preview');
+                        holder.querySelector('.muted')?.remove();
                         holder.querySelector('img')?.remove();
                         holder.insertAdjacentHTML('beforeend', `<img src="${esc(m.url)}" alt="">`);
                         dlg.close();
@@ -372,6 +378,120 @@
                     grid.appendChild(b);
                 });
             } catch (err) { grid.innerHTML = `<p class="error-text">${esc(err.message)}</p>`; }
+        });
+    }
+
+
+    /* ---------- Installable app & push notifications ---------- */
+    if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+        navigator.serviceWorker.register(base + '/sw.js', { scope: base + '/' }).catch(() => {});
+    }
+    let installPrompt = null;
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        installPrompt = e;
+        $$('[data-install]').forEach((b) => { b.hidden = false; });
+    });
+    $$('[data-install]').forEach((b) => b.addEventListener('click', async () => {
+        if (!installPrompt) return;
+        installPrompt.prompt();
+        await installPrompt.userChoice;
+        installPrompt = null;
+        b.hidden = true;
+    }));
+
+    const pushBox = $('[data-push]');
+    if (pushBox) {
+        const state = $('[data-push-state]', pushBox);
+        const on = $('[data-push-enable]', pushBox);
+        const off = $('[data-push-disable]', pushBox);
+        const urlB64 = (s) => { const p = '='.repeat((4 - s.length % 4) % 4); const raw = atob((s + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(raw, (c) => c.charCodeAt(0)); };
+        const refresh = async () => {
+            if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+                state.textContent = 'This browser doesn’t support push notifications here (it needs HTTPS, or the Home Screen app on iPhone).';
+                return;
+            }
+            const reg = await navigator.serviceWorker.ready;
+            const sub = await reg.pushManager.getSubscription();
+            state.textContent = sub ? 'On for this device.' : (Notification.permission === 'denied' ? 'Blocked in browser settings.' : 'Off for this device.');
+            on.hidden = !!sub || Notification.permission === 'denied';
+            off.hidden = !sub;
+        };
+        on.addEventListener('click', async () => {
+            try {
+                const perm = await Notification.requestPermission();
+                if (perm !== 'granted') { refresh(); return; }
+                const reg = await navigator.serviceWorker.ready;
+                const { key } = await api('/push/key');
+                const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64(key) });
+                await api('/push/subscribe', { method: 'POST', body: Object.assign(sub.toJSON(), { _token: csrf() }) });
+                toast('Notifications on');
+            } catch (err) { toast(err.message, 'error'); }
+            refresh();
+        });
+        off.addEventListener('click', async () => {
+            const reg = await navigator.serviceWorker.ready;
+            const sub = await reg.pushManager.getSubscription();
+            if (sub) {
+                await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint, _token: csrf() } }).catch(() => {});
+                await sub.unsubscribe();
+            }
+            refresh();
+        });
+        refresh();
+    }
+
+    /* ---------- Autolists: time rows and media picking ---------- */
+    document.addEventListener('click', (e) => {
+        const add = e.target.closest('[data-add-time]');
+        if (add) {
+            const row = document.createElement('span');
+            row.className = 'time-row';
+            row.innerHTML = `<input type="time" name="times[]" value="12:00"><button type="button" class="icon-btn" data-remove-time aria-label="Remove time">${icon('x')}</button>`;
+            add.before(row);
+        }
+        const rm = e.target.closest('[data-remove-time]');
+        if (rm && $$('.time-row', rm.closest('[data-times]')).length > 1) rm.closest('.time-row').remove();
+        const rmMedia = e.target.closest('[data-remove-media]');
+        if (rmMedia) rmMedia.closest('.mini-thumb').remove();
+    });
+    const pickDlg = $('#pick-media-dialog');
+    if (pickDlg) {
+        let target = null;
+        let chosen = [];
+        let items = [];
+        document.addEventListener('click', async (e) => {
+            const btn = e.target.closest('[data-pick-media]');
+            if (!btn) return;
+            target = btn.closest('[data-media-field]');
+            chosen = [];
+            pickDlg.showModal();
+            const grid = $('#pick-media-grid');
+            try {
+                items = (await api('/media')).media;
+                const draw = () => {
+                    grid.innerHTML = items.length ? items.map((m) => `<button type="button" class="media-pick${chosen.includes(m.id) ? ' selected' : ''}" data-id="${m.id}">${m.is_video ? `<video src="${esc(m.url)}#t=0.1" muted preload="metadata"></video>` : `<img src="${esc(m.url)}" alt="" loading="lazy">`}<span class="num">${chosen.indexOf(m.id) + 1}</span></button>`).join('') : '<p class="muted">Upload media on the Media page first.</p>';
+                };
+                grid.onclick = (ev) => {
+                    const b = ev.target.closest('.media-pick');
+                    if (!b) return;
+                    const id = Number(b.dataset.id);
+                    const i = chosen.indexOf(id);
+                    i >= 0 ? chosen.splice(i, 1) : chosen.push(id);
+                    draw();
+                };
+                draw();
+            } catch (err) { grid.innerHTML = `<p class="error-text">${esc(err.message)}</p>`; }
+        });
+        $('#pick-media-done').addEventListener('click', () => {
+            chosen.forEach((id) => {
+                const m = items.find((x) => x.id === id);
+                const el = document.createElement('span');
+                el.className = 'mini-thumb';
+                el.innerHTML = `<input type="hidden" name="media[]" value="${m.id}">${m.is_video ? icon('play') : `<img src="${esc(m.url)}" alt="">`}<button type="button" data-remove-media aria-label="Remove">${icon('x')}</button>`;
+                target.querySelector('[data-pick-media]').before(el);
+            });
+            pickDlg.close();
         });
     }
 
@@ -703,30 +823,32 @@
             }));
         }
 
-        // Canva inside the media dialog.
-        const canvaOpen = $('[data-canva-open]');
-        if (canvaOpen) {
+        // Canva / Google Drive inside the media dialog.
+        const cloudBtns = $$('[data-cloud-open]');
+        if (cloudBtns.length) {
             const panel = $('#canva-panel');
             let browser = null;
-            canvaOpen.addEventListener('click', () => {
+            cloudBtns.forEach((btn) => btn.addEventListener('click', () => {
                 panel.hidden = false;
                 $('#media-library').hidden = true;
-                canvaOpen.parentElement.hidden = true;
-                browser ??= canvaBrowser({
+                btn.parentElement.hidden = true;
+                browser?.destroy();
+                browser = canvaBrowser({
+                    source: btn.dataset.cloudOpen,
                     grid: $('#canva-grid'), q: $('#canva-q'), more: $('#canva-more'),
                     back: location.pathname,
                     onImport: (items) => {
                         items.forEach((m) => { library.unshift(m); picked.push(m.id); });
                         $('[data-canva-close]').click();
                         renderLibrary();
-                        toast(items.length > 1 ? `Imported ${items.length} pages` : 'Imported from Canva');
+                        toast(items.length > 1 ? `Imported ${items.length} files` : 'Imported');
                     },
                 });
-            });
+            }));
             $('[data-canva-close]').addEventListener('click', () => {
                 panel.hidden = true;
                 $('#media-library').hidden = false;
-                canvaOpen.parentElement.hidden = false;
+                cloudBtns[0].parentElement.hidden = false;
             });
         }
         renderMedia();

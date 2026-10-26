@@ -18,6 +18,7 @@ final class Cron
         // Each job is isolated so one failing integration can't stop publishing or the others.
         $report = [];
         $jobs = [
+            'autolists' => fn() => Autolists::runDue(),
             'posts' => fn() => Publisher::runDue(),
             'webhooks' => fn() => Webhooks::deliverPending(),
             'metrics' => fn() => Metrics::import(),
@@ -25,6 +26,7 @@ final class Cron
             'competitors' => fn() => Competitors::refreshDue(),
             'ads' => fn() => Ads::importDue(),
             'reports' => fn() => Reports::sendDue(),
+            'hashtags' => fn() => Hashtags::checkDue(),
         ];
         foreach ($jobs as $name => $job) {
             try {
@@ -41,6 +43,7 @@ final class Cron
         if (!is_file($daily) || filemtime($daily) < time() - 86400) {
             touch($daily);
             Webhooks::prune();
+            WebAnalytics::prune();
             Db::query('DELETE FROM logs WHERE created_at < ?', [gmdate('Y-m-d H:i:s', time() - 30 * 86400)]);
             Db::query('DELETE FROM invitations WHERE accepted_at IS NULL AND created_at < ?', [gmdate('Y-m-d H:i:s', time() - 7 * 86400)]);
         }

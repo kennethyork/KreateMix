@@ -15,19 +15,24 @@ $unread = $ws ? (int) Db::value("SELECT COUNT(*) FROM inbox_items WHERE workspac
 
 $nav = Hooks::filter('nav', [
     ['label' => 'Dashboard', 'href' => '/', 'icon' => 'home', 'match' => '#^/$#'],
-    ['label' => 'Calendar', 'href' => '/calendar', 'icon' => 'calendar', 'match' => '#^/calendar#'],
-    ['label' => 'Posts', 'href' => '/posts', 'icon' => 'list', 'match' => '#^/posts(?!/new)#', 'badge' => $pending ?: null],
     ['label' => 'Inbox', 'href' => '/inbox', 'icon' => 'inbox', 'match' => '#^/inbox#', 'badge' => $unread ?: null],
-    ['label' => 'Analytics', 'href' => '/analytics', 'icon' => 'chart', 'match' => '#^/analytics#'],
-    ['label' => 'Reports', 'href' => '/reports', 'icon' => 'file', 'match' => '#^/reports#'],
-    ['label' => 'Competitors', 'href' => '/competitors', 'icon' => 'target', 'match' => '#^/competitors#'],
-    ['label' => 'Ads', 'href' => '/ads', 'icon' => 'megaphone', 'match' => '#^/ads#'],
+    ['section' => 'Publish'],
+    ['label' => 'Calendar', 'href' => '/calendar', 'icon' => 'calendar', 'match' => '#^/calendar#'],
+    ['label' => 'Posts', 'href' => '/posts', 'icon' => 'list', 'match' => '#^/(posts(?!/new)|import)#', 'badge' => $pending ?: null],
+    ['label' => 'Autolists', 'href' => '/autolists', 'icon' => 'refresh', 'match' => '#^/autolists#'],
     ['label' => 'Media', 'href' => '/media', 'icon' => 'image', 'match' => '#^/media#'],
     ['label' => 'Library', 'href' => '/library', 'icon' => 'book', 'match' => '#^/library#'],
     ['label' => 'Link in bio', 'href' => '/bio', 'icon' => 'link', 'match' => '#^/bio#'],
-    ['label' => 'Accounts', 'href' => '/accounts', 'icon' => 'users', 'match' => '#^/accounts#'],
+    ['section' => 'Measure'],
+    ['label' => 'Analytics', 'href' => '/analytics', 'icon' => 'chart', 'match' => '#^/analytics#'],
+    ['label' => 'Reports', 'href' => '/reports', 'icon' => 'file', 'match' => '#^/reports#'],
+    ['label' => 'Competitors', 'href' => '/competitors', 'icon' => 'target', 'match' => '#^/competitors#'],
+    ['label' => 'Hashtags', 'href' => '/hashtags', 'icon' => 'hash', 'match' => '#^/hashtags#'],
+    ['label' => 'Website', 'href' => '/websites', 'icon' => 'globe', 'match' => '#^/websites#'],
+    ['label' => 'Ads', 'href' => '/ads', 'icon' => 'megaphone', 'match' => '#^/ads#'],
 ]);
 $wsNav = [
+    ['label' => 'Accounts', 'href' => '/accounts', 'icon' => 'users', 'match' => '#^/accounts#'],
     ['label' => 'Team', 'href' => '/members', 'icon' => 'team', 'match' => '#^/members#'],
     ['label' => 'API & webhooks', 'href' => '/developers', 'icon' => 'code', 'match' => '#^/developers#'],
 ];
@@ -41,6 +46,9 @@ $adminNav = Auth::isAdmin() ? [
 ] : [];
 
 $navLink = function (array $item) use ($path): string {
+    if (isset($item['section'])) {
+        return '<div class="nav-section">' . e($item['section']) . '</div>';
+    }
     $active = preg_match($item['match'] ?? '#^' . preg_quote($item['href'], '#') . '#', $path);
     $badge = !empty($item['badge']) ? '<span class="nav-badge">' . e($item['badge']) . '</span>' : '';
     return '<a href="' . e(url($item['href'])) . '" class="nav-link' . ($active ? ' active' : '') . '"' . ($active ? ' aria-current="page"' : '') . '>'
@@ -56,6 +64,10 @@ $navLink = function (array $item) use ($path): string {
 <title><?= e(($title ? $title . ' · ' : '') . App\Config::get('app_name', 'MixCreate')) ?></title>
 <link rel="icon" href="<?= e(asset('favicon.svg')) ?>" type="image/svg+xml">
 <link rel="stylesheet" href="<?= e(asset('app.css')) ?>">
+<link rel="manifest" href="<?= e(url('manifest.webmanifest')) ?>">
+<link rel="apple-touch-icon" href="<?= e(asset('icon-192.png')) ?>">
+<meta name="theme-color" content="#4f46e5">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <script>try{var t=localStorage.getItem('mc-theme');if(t)document.documentElement.dataset.theme=t;}catch(e){}</script>
 </head>
 <body>

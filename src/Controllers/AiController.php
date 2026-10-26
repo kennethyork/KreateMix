@@ -13,8 +13,8 @@ final class AiController
 {
     public function assist(): void
     {
-        if (!Ai::enabled()) {
-            json_response(['error' => 'AI isn’t set up. An instance admin can add it under Integrations.'], 422);
+        if (!Ai::enabled(Workspace::id())) {
+            json_response(['error' => 'AI isn’t set up. Add an OpenRouter key in workspace settings, or ask your admin to add one under Integrations.'], 422);
         }
         $action = (string) input('action', '');
         $text = (string) input('text', '');
@@ -32,7 +32,7 @@ final class AiController
             }
         }
         try {
-            $out = Ai::assist($action, $text, $idea, $limit, $networks, (string) Settings::value('ai', 'brand_voice', ''));
+            $out = Ai::assist($action, $text, $idea, $limit, $networks, (string) (Ai::config(Workspace::id())['brand_voice'] ?? ''), Workspace::id());
         } catch (\Throwable $e) {
             json_response(['error' => $e->getMessage()], 422);
         }

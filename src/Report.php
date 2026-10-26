@@ -14,27 +14,47 @@ final class Report
 
     private Pdf $pdf;
     private float $y = 0;
+    private string $accent = self::ACCENT;
+    private array $brand = [];
 
-    public static function pdf(array $a, string $workspace, string $scope, string $tz): string
+    /** $brand from Branding::for(); defaults to plain MixCreate styling. */
+    public static function pdf(array $a, string $workspace, string $scope, string $tz, array $brand = []): string
     {
         $r = new self();
-        return $r->render($a, $workspace, $scope, $tz);
+        return $r->render($a, $workspace, $scope, $tz, $brand);
     }
 
-    private function render(array $a, string $workspace, string $scope, string $tz): string
+    private function render(array $a, string $workspace, string $scope, string $tz, array $brand): string
     {
+        $this->brand = $brand;
+        $this->accent = $brand['color'] ?? self::ACCENT;
+        $on = Branding::onColor($this->accent);
         $p = $this->pdf = new Pdf();
         $p->addPage();
         $w = Pdf::W - 2 * self::M;
 
         // Header band
-        $p->fill(self::ACCENT);
+        $p->fill($this->accent);
         $p->rect(0, 0, Pdf::W, 92);
-        $p->fill('#ffffff');
+        $x = self::M;
+        if (!empty($brand['logo'])) {
+            $logo = MediaTools::jpeg($brand['logo'], null, 400);
+            $p->fill('#ffffff');
+            $p->rect(self::M, 18, 56, 56, true, false, 8);
+            $info = @getimagesize($logo['path']);
+            if ($info) {
+                $scale = min(46 / $info[0], 46 / $info[1]);
+                $lw = $info[0] * $scale;
+                $lh = $info[1] * $scale;
+                $p->image($logo['path'], self::M + 28 - $lw / 2, 46 - $lh / 2, $lw, $lh);
+            }
+            $x += 70;
+        }
+        $p->fill($on);
         $p->font(20, true);
-        $p->text(self::M, 44, $workspace);
+        $p->textFit($x, 44, $brand['name'] ?? $workspace, 300);
         $p->font(11);
-        $p->text(self::M, 66, 'Social media report · ' . $scope);
+        $p->text($x, 66, 'Social media report · ' . $scope);
         $p->text(Pdf::W - self::M, 44, self::range($a['from'], $a['to']), 'R');
         $p->font(9);
         $p->text(Pdf::W - self::M, 66, 'Generated ' . (new \DateTimeImmutable('now', new \DateTimeZone($tz)))->format('M j, Y'), 'R');
@@ -233,7 +253,7 @@ final class Report
 
         if ($type === 'bar') {
             $bw = max(1.2, $pw / $n * 0.65);
-            $p->fill(self::ACCENT);
+            $p->fill($this->accent);
             foreach ($series as $i => $s) {
                 $v = (float) ($s['value'] ?? 0);
                 if ($v > 0) {
@@ -252,9 +272,9 @@ final class Report
             $area = $pts;
             $area[] = [end($pts)[0], $py + $ph];
             $area[] = [$pts[0][0], $py + $ph];
-            $p->fill('#e8e7fc');
+            $p->fill(self::tint($this->accent, 0.15));
             $p->polyline($area, true);
-            $p->stroke(self::ACCENT, 1.6);
+            $p->stroke($this->accent, 1.6);
             $p->polyline($pts);
         }
     }
@@ -275,8 +295,23 @@ final class Report
         $this->page++;
         $this->pdf->fill(self::MUTED);
         $this->pdf->font(8);
-        $this->pdf->text(self::M, Pdf::H - 24, Config::get('app_name', 'MixCreate'));
+        $left = $this->brand['footer'] ?? '';
+        if ($left === '') {
+            $left = $this->brand['name'] ?? Config::get('app_name', 'MixCreate');
+            if (empty($this->brand['hide_powered_by']) && isset($this->brand['name'])) {
+                $left .= ' · made with ' . Config::get('app_name', 'MixCreate');
+            }
+        }
+        $this->pdf->text(self::M, Pdf::H - 24, $left);
         $this->pdf->text(Pdf::W - self::M, Pdf::H - 24, 'Page ' . $this->page, 'R');
+    }
+
+    /** Mixes a color with white. */
+    public static function tint(string $hex, float $amount): string
+    {
+        $hex = ltrim($hex, '#');
+        $c = [hexdec(substr($hex, 0, 2)), hexdec(substr($hex, 2, 2)), hexdec(substr($hex, 4, 2))];
+        return sprintf('#%02x%02x%02x', ...array_map(fn($v) => (int) round(255 - (255 - $v) * $amount), $c));
     }
 
     private static function range(string $from, string $to): string

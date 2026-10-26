@@ -5,6 +5,7 @@
         <p class="muted"><?= e($scope) ?> · <?= e(date('M j', strtotime($a['from'])) . ' – ' . date('M j, Y', strtotime($a['to']))) ?></p>
     </div>
     <div class="head-actions">
+        <a class="btn" href="<?= e(url('/reports/pptx', $params)) ?>"><?= icon('download') ?> PowerPoint</a>
         <a class="btn btn-primary" href="<?= e(url('/reports/pdf', $params)) ?>"><?= icon('download') ?> Download PDF</a>
     </div>
 </div>

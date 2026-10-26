@@ -13,6 +13,8 @@ final class Pdf
     public const H = 841.89;
 
     private array $pages = [];
+    /** @var array<string, array{data: string, w: int, h: int}> JPEG images by name */
+    private array $images = [];
     private string $buf = '';
     private float $size = 10;
     private bool $bold = false;
@@ -81,6 +83,22 @@ final class Pdf
             $x1 + $r, $y2, $x1 + $r - $k, $y2, $x1, $y2 + $r - $k, $x1, $y2 + $r,
             $x1, $y1 - $r, $x1, $y1 - $r + $k, $x1 + $r - $k, $y1, $x1 + $r, $y1, $op
         );
+    }
+
+    /** Draws a JPEG file. Height is derived from the aspect ratio when $h is 0. Returns the drawn height. */
+    public function image(string $jpegPath, float $x, float $y, float $w, float $h = 0): float
+    {
+        $info = @getimagesize($jpegPath);
+        if (!$info || $info[2] !== IMAGETYPE_JPEG) {
+            return 0;
+        }
+        $name = 'Im' . substr(md5($jpegPath), 0, 8);
+        $this->images[$name] ??= ['data' => (string) file_get_contents($jpegPath), 'w' => $info[0], 'h' => $info[1]];
+        if ($h <= 0) {
+            $h = $w * $info[1] / $info[0];
+        }
+        $this->buf .= sprintf("q %.2F 0 0 %.2F %.2F %.2F cm /%s Do Q\n", $w, $h, $x, self::H - $y - $h, $name);
+        return $h;
     }
 
     public function line(float $x1, float $y1, float $x2, float $y2): void
@@ -169,11 +187,18 @@ final class Pdf
         $objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
         $kids = [];
         $n = 5;
+        $xobjects = '';
+        foreach ($this->images as $name => $img) {
+            $objs[$n] = sprintf("<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length %d >>\nstream\n", $img['w'], $img['h'], strlen($img['data'])) . $img['data'] . "\nendstream";
+            $xobjects .= "/$name $n 0 R ";
+            $n++;
+        }
+        $res = '/Font << /F1 3 0 R /F2 4 0 R >>' . ($xobjects !== '' ? " /XObject << $xobjects>>" : '');
         foreach ($this->pages as $content) {
             $pageId = $n++;
             $contentId = $n++;
             $kids[] = "$pageId 0 R";
-            $objs[$pageId] = sprintf('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %.2F %.2F] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents %d 0 R >>', self::W, self::H, $contentId);
+            $objs[$pageId] = sprintf('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %.2F %.2F] /Resources << %s >> /Contents %d 0 R >>', self::W, self::H, $res, $contentId);
             $z = gzcompress($content);
             $objs[$contentId] = "<< /Length " . strlen($z) . " /Filter /FlateDecode >>\nstream\n" . $z . "\nendstream";
         }

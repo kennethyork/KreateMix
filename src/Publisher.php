@@ -51,7 +51,7 @@ final class Publisher
         $post = Db::one('SELECT * FROM posts WHERE id = ?', [$postId]);
         $media = self::resolveMedia(json_arr($post['media']));
         $targets = Db::all(
-            "SELECT pa.*, a.provider, a.provider_id, a.name, a.username, a.token, a.data, a.authorized
+            "SELECT pa.*, a.provider, a.provider_id, a.name, a.username, a.token, a.data, a.authorized, a.workspace_id
              FROM post_accounts pa JOIN accounts a ON a.id = pa.account_id
              WHERE pa.post_id = ?",
             [$postId]
@@ -77,6 +77,13 @@ final class Publisher
         $post = Db::one('SELECT * FROM posts WHERE id = ?', [$postId]);
         Hooks::fire($status === 'published' ? 'post.published' : 'post.failed', $post, $results);
         Webhooks::dispatch((int) $post['workspace_id'], 'post.' . $status, ['post' => PostService::toArray($post)]);
+        $excerpt = str_limit($post['content'] !== '' ? $post['content'] : '(media)', 120);
+        if ($status === 'failed') {
+            $why = current(array_filter(array_column($results, 'error'))) ?: '';
+            Notify::users([$post['user_id'], ...Notify::workspaceAdmins((int) $post['workspace_id'])], 'failed', 'Post failed to publish', $excerpt . ($why ? " — $why" : ''), '/posts/' . $post['id']);
+        } else {
+            Notify::users([$post['user_id']], 'published', 'Post published', $excerpt, '/posts/' . $post['id']);
+        }
         return $status;
     }
 
@@ -92,6 +99,7 @@ final class Publisher
             $account = $target;
             $account['id'] = $accountId;
             $provider = Registry::withFreshToken($account);
+            $provider->options = json_arr($target['options'] ?? '{}');
 
             $result = $provider->publish($text, $media);
             Db::update('post_accounts', [
@@ -101,6 +109,22 @@ final class Publisher
                 'error' => null,
                 'published_at' => now(),
             ], 'post_id = ? AND account_id = ?', [$post['id'], $accountId]);
+
+            // First comment: best effort, never fails the post.
+            $comment = trim((string) ($post['first_comment'] ?? ''));
+            if ($comment !== '' && !empty($result['id']) && ($provider->options['type'] ?? 'feed') !== 'story') {
+                $status = 'skipped';
+                if ($provider::supportsFirstComment()) {
+                    try {
+                        $provider->firstComment((string) $result['id'], Variables::apply((int) $post['workspace_id'], $comment));
+                        $status = 'sent';
+                    } catch (\Throwable $e) {
+                        $status = 'failed';
+                        log_event('warning', "First comment failed for post {$post['id']} account $accountId: " . $e->getMessage());
+                    }
+                }
+                Db::update('post_accounts', ['first_comment_status' => $status], 'post_id = ? AND account_id = ?', [$post['id'], $accountId]);
+            }
             return ['ok' => true, 'url' => $result['url'] ?? null];
         } catch (\Throwable $e) {
             if ($e instanceof ProviderException && $e->unauthorized) {
