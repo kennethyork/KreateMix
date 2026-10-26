@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Self-host KreateMix on a $2 VPS with CloudPanel</title>
+<meta name="description" content="Step-by-step guide: rent a cheap VPS, install CloudPanel, and run KreateMix with HTTPS, cron and backups.">
+<meta name="theme-color" content="#4f46e5">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="favicon.svg" alt="">KreateMix</a>
+    <nav>
+      <a href="./#features">Features</a>
+      <a href="./#cost">Cost</a>
+      <a href="self-host.html" aria-current="page">Self-host guide</a>
+      <a href="https://github.com/kennethyork/KreateMix">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap guide">
+  <aside class="toc">
+    <strong>On this page</strong>
+    <ol>
+      <li><a href="#need">What you need</a></li>
+      <li><a href="#vps">Pick a VPS</a></li>
+      <li><a href="#dns">Point your domain</a></li>
+      <li><a href="#ssh">Connect to the server</a></li>
+      <li><a href="#cloudpanel">Install CloudPanel</a></li>
+      <li><a href="#admin">Secure the panel</a></li>
+      <li><a href="#site">Create the site</a></li>
+      <li><a href="#ssl">Turn on HTTPS</a></li>
+      <li><a href="#install">Install KreateMix</a></li>
+      <li><a href="#cron">Add the cron job</a></li>
+      <li><a href="#php">PHP settings for video</a></li>
+      <li><a href="#platforms">Connect your networks</a></li>
+      <li><a href="#backups">Backups</a></li>
+      <li><a href="#updates">Updating</a></li>
+      <li><a href="#harden">Extra security</a></li>
+      <li><a href="#trouble">Troubleshooting</a></li>
+    </ol>
+  </aside>
+
+  <article class="content">
+    <h1>Self-host KreateMix on a $2 VPS with CloudPanel</h1>
+    <p class="lead">This guide takes you from nothing to a working KreateMix at <code>https://social.yourdomain.com</code>, with free HTTPS, scheduled posting and backups. It takes about 30–45 minutes. You don't need to have run a server before; every command is here to copy and paste.</p>
+
+    <h2 id="need">1. What you need</h2>
+    <ul>
+      <li><strong>A VPS with at least 2 GB of RAM</strong> running Ubuntu 24.04. 2 GB is CloudPanel's minimum. See <a href="#vps">the next step</a>.</li>
+      <li><strong>A domain name</strong>, or a subdomain of one you own, such as <code>social.yourdomain.com</code>. Free HTTPS certificates and most social networks' login screens need a real domain, not a bare IP address.</li>
+      <li><strong>A computer with a terminal.</strong> On Windows 10 and 11, PowerShell already includes <code>ssh</code>. On a Mac, use Terminal.</li>
+    </ul>
+    <p>Throughout this guide, replace these placeholders with your own values:</p>
+    <table>
+      <tr><th>Placeholder</th><th>Example</th></tr>
+      <tr><td><code>YOUR_SERVER_IP</code></td><td><code>203.0.113.25</code>, from your VPS provider's dashboard</td></tr>
+      <tr><td><code>social.yourdomain.com</code></td><td>The address KreateMix will live at</td></tr>
+      <tr><td><code>kreatemix</code></td><td>The site user you'll create in CloudPanel</td></tr>
+    </table>
+
+    <h2 id="vps">2. Pick a VPS</h2>
+    <p>CloudPanel needs <strong>1 CPU core, 2 GB of RAM and 10 GB of disk</strong>. KreateMix itself is light: it keeps everything in one SQLite file. These are the cheapest plans that meet CloudPanel's minimum (prices checked October 2026; they change often, so confirm on the provider's site):</p>
+    <table>
+      <tr><th>Plan</th><th>Specs</th><th>Price</th><th>Best for</th></tr>
+      <tr>
+        <td><strong>IONOS VPS S+</strong> (recommended to start)</td>
+        <td>1 vCore, 2 GB RAM, 60 GB NVMe</td>
+        <td><strong>$2/month</strong> for the first 3 months, then the regular price (listed as $6/month). 1-year term.</td>
+        <td>The cheapest start, with plenty of disk for media</td>
+      </tr>
+      <tr>
+        <td><strong>RackNerd KVM 2 GB</strong></td>
+        <td>2 vCPU, 2 GB RAM, 35 GB SSD</td>
+        <td>About $3/month, billed yearly ($35.99/year)</td>
+        <td>The lowest price over a full year</td>
+      </tr>
+    </table>
+    <div class="warn">
+      <p><strong>Avoid 1 GB plans</strong>, even at $1–2 a month. They're below CloudPanel's minimum, and the panel's database server will run out of memory.</p>
+    </div>
+    <p>When you order:</p>
+    <ol>
+      <li>Choose <strong>Ubuntu 24.04</strong> as the operating system. If you're offered an "app" or "control panel" image, pick plain Ubuntu instead. CloudPanel must go on an empty server.</li>
+      <li>Pick the data center closest to you or your audience.</li>
+      <li>Set a strong root password, or add your SSH key if the provider offers it.</li>
+      <li>After the server is created, copy its <strong>IPv4 address</strong> from the dashboard.</li>
+    </ol>
+    <p>If your provider has its own firewall in its dashboard (IONOS does), allow incoming TCP ports <strong>22</strong> (SSH), <strong>80</strong> and <strong>443</strong> (web) and <strong>8443</strong> (CloudPanel).</p>
+
+    <h2 id="dns">3. Point your domain at the server</h2>
+    <p>At the company you bought your domain from (or wherever your DNS is managed, such as Cloudflare), add a DNS record:</p>
+    <table>
+      <tr><th>Type</th><th>Name / Host</th><th>Value</th><th>TTL</th></tr>
+      <tr><td>A</td><td><code>social</code> (or <code>@</code> to use the bare domain)</td><td><code>YOUR_SERVER_IP</code></td><td>Auto or 300</td></tr>
+    </table>
+    <p>Do this now. It can take a few minutes to an hour to start working, and you'll need it working before <a href="#ssl">step 8</a>. If you use Cloudflare, set the record to <strong>DNS only</strong> (grey cloud) until HTTPS is set up.</p>
+
+    <h2 id="ssh">4. Connect to the server</h2>
+    <p>Open PowerShell (Windows) or Terminal (Mac/Linux) and run:</p>
+    <pre><code>ssh root@YOUR_SERVER_IP</code></pre>
+    <p>Type <kbd>yes</kbd> when asked whether to trust the server, then enter the root password. Nothing appears on screen while you type the password; that's normal. Your prompt will change to something like <code>root@ubuntu:~#</code>.</p>
+    <div class="note"><p>Some providers (including RackNerd) email you the root password. Some (including IONOS) show it in the server's dashboard.</p></div>
+
+    <h2 id="cloudpanel">5. Install CloudPanel</h2>
+    <p>First, update the server and install the tools the installer needs:</p>
+    <pre><code>apt update &amp;&amp; apt -y upgrade &amp;&amp; apt -y install curl wget sudo</code></pre>
+    <p>If you're asked about keeping a configuration file, press <kbd>Enter</kbd> to keep the current one.</p>
+
+    <h3>Add swap space</h3>
+    <p>Swap is disk space the server uses when RAM runs out. On a 2 GB server it stops occasional memory spikes from crashing anything. Check whether you already have some:</p>
+    <pre><code>free -h</code></pre>
+    <p>If the <code>Swap:</code> line shows <code>0B</code>, add 2 GB of swap:</p>
+    <pre><code>fallocate -l 2G /swapfile &amp;&amp; chmod 600 /swapfile &amp;&amp; mkswap /swapfile &amp;&amp; swapon /swapfile
+echo '/swapfile none swap sw 0 0' &gt;&gt; /etc/fstab</code></pre>
+
+    <h3>Run the installer</h3>
+    <p>CloudPanel asks you to choose a database server. KreateMix doesn't use it (it has its own SQLite file), so pick <strong>MariaDB 11.4</strong>, which uses less memory than MySQL:</p>
+    <pre><code>curl -sS https://installer.cloudpanel.io/ce/v2/install.sh -o install.sh; \
+echo "8146dbe0a488e7088b04071b0c34d59aa0ab1fe9dcec382d395fd155c9e6c476 install.sh" | \
+sha256sum -c &amp;&amp; sudo DB_ENGINE=MARIADB_11.4 bash install.sh</code></pre>
+    <p>The checksum line checks that the installer hasn't been tampered with. It takes 5–10 minutes and finishes with a message showing the panel's address.</p>
+    <div class="warn">
+      <p><strong>If you see <code>install.sh: FAILED</code></strong>, CloudPanel has released a new installer and the checksum above is out of date. Copy the current command from <a href="https://www.cloudpanel.io/docs/v2/getting-started/other/">CloudPanel's installation docs</a> and change only the <code>DB_ENGINE=</code> part. Don't remove the checksum check.</p>
+    </div>
+
+    <h2 id="admin">6. Create your CloudPanel admin and secure the panel</h2>
+    <div class="warn"><p><strong>Do this straight after the installer finishes.</strong> Until an admin account exists, anyone who finds the address can create one.</p></div>
+    <ol>
+      <li>Open <code>https://YOUR_SERVER_IP:8443</code> in your browser.</li>
+      <li>Your browser will warn about the certificate, because the panel uses a self-signed one at first. Click <strong>Advanced</strong>, then <strong>Proceed</strong> (or <strong>Accept the risk</strong>).</li>
+      <li>Fill in your name, email, a username and a strong password, and create the admin user.</li>
+      <li>Click your name (top right) and turn on <strong>Two-Factor Authentication</strong> with an authenticator app.</li>
+      <li>Go to <strong>Admin Area → Security → Firewall</strong>. Edit the rule for port <strong>8443</strong> and set the source to your own IP address (search "what is my IP" to find it), so only you can reach the panel. Leave 22, 80 and 443 open to everyone.</li>
+    </ol>
+    <div class="note"><p>If your home IP changes often, you can skip restricting 8443 and rely on a strong password and two-factor sign-in instead.</p></div>
+
+    <h2 id="site">7. Create the site</h2>
+    <ol>
+      <li>Go to <strong>Sites → Add Site → Create a PHP Site</strong>.</li>
+      <li><strong>Application:</strong> choose <strong>Generic</strong>.</li>
+      <li><strong>Domain Name:</strong> <code>social.yourdomain.com</code>.</li>
+      <li><strong>PHP Version:</strong> the newest offered (8.4 at the time of writing). KreateMix needs 8.1 or newer.</li>
+      <li><strong>Site User:</strong> <code>kreatemix</code>. <strong>Site User Password:</strong> click the generate button and <strong>save this password</strong>. You'll use it to connect over SSH in step 9.</li>
+      <li>Click <strong>Create</strong>.</li>
+    </ol>
+    <p>CloudPanel creates the folder <code>/home/kreatemix/htdocs/social.yourdomain.com</code> for the site.</p>
+
+    <h2 id="ssl">8. Turn on HTTPS</h2>
+    <p>First check that your domain points at the server. On your own computer, run this. It should print <code>YOUR_SERVER_IP</code>:</p>
+    <pre><code>nslookup social.yourdomain.com</code></pre>
+    <p>Then, in CloudPanel:</p>
+    <ol>
+      <li>Open the site, then the <strong>SSL/TLS</strong> tab.</li>
+      <li>Click <strong>Actions → New Let's Encrypt Certificate → Create and Install</strong>.</li>
+    </ol>
+    <p>The certificate is free and renews itself automatically. HTTPS is required: social networks won't send logins back to a plain <code>http://</code> address, and push notifications and the installable app only work over HTTPS.</p>
+
+    <h2 id="install">9. Install KreateMix</h2>
+    <p>Connect as the <strong>site user</strong>, not root, so the files belong to the right account. Use the password you saved in step 7:</p>
+    <pre><code>ssh kreatemix@YOUR_SERVER_IP</code></pre>
+    <p>Go to the site's folder, remove CloudPanel's placeholder page and download KreateMix:</p>
+    <pre><code>cd ~/htdocs/social.yourdomain.com
+rm -f index.html index.php
+curl -fsSLO https://raw.githubusercontent.com/kennethyork/KreateMix/main/index.php
+ls -l</code></pre>
+    <p>You should see <code>index.php</code>, owned by <code>kreatemix</code>. Check that PHP has everything KreateMix needs (change <code>8.4</code> to your version). You should see six names, including <code>pdo_sqlite</code>:</p>
+    <pre><code>php8.4 -m | grep -iE '^(pdo_sqlite|curl|openssl|mbstring|fileinfo|gd)$'</code></pre>
+    <div class="note"><p><strong>Prefer clicking to typing?</strong> Download <a href="https://github.com/kennethyork/KreateMix/raw/main/index.php">index.php</a> to your computer, then upload it with the site's <strong>File Manager</strong> tab in CloudPanel, or with an SFTP app such as FileZilla or WinSCP (host <code>YOUR_SERVER_IP</code>, port 22, the site user and password).</p></div>
+
+    <h3>Create your account</h3>
+    <div class="warn"><p><strong>Do this right away</strong>: the first person to open the site creates the admin account.</p></div>
+    <ol>
+      <li>Open <code>https://social.yourdomain.com</code>.</li>
+      <li>Create the admin account.</li>
+    </ol>
+    <p>On that first visit KreateMix creates two files. Both are hidden from the web:</p>
+    <table>
+      <tr><th>File</th><th>Where</th><th>What</th></tr>
+      <tr><td><code>.ht.kreatemix-config.php</code></td><td>Next to <code>index.php</code></td><td>Settings and the key that encrypts your accounts' tokens</td></tr>
+      <tr><td><code>.ht.kreatemix-….sqlite</code></td><td><code>~/htdocs/</code>, one folder up, out of the web server's reach</td><td>The database: posts, accounts, analytics and uploaded media</td></tr>
+    </table>
+
+    <h2 id="cron">10. Add the cron job</h2>
+    <p>Without this, scheduled posts won't be published. The cron job wakes KreateMix every minute to publish posts that are due, refresh analytics and fetch comments.</p>
+    <ol>
+      <li>In CloudPanel, open the site, then the <strong>Cron Jobs</strong> tab, then <strong>Add Cron Job</strong>.</li>
+      <li><strong>Name:</strong> <code>KreateMix scheduler</code></li>
+      <li><strong>Pre-defined settings:</strong> <strong>Every Minute</strong> (all five fields become <code>*</code>).</li>
+      <li><strong>Command</strong> (change <code>8.4</code> if you picked another PHP version in step 7):
+        <pre><code>/usr/bin/php8.4 /home/kreatemix/htdocs/social.yourdomain.com/index.php cron &gt;/dev/null 2&gt;&amp;1</code></pre>
+      </li>
+      <li>Click <strong>Add Cron Job</strong>.</li>
+    </ol>
+    <p>To check it works, schedule a test post for two minutes from now. If you only want to test without posting for real, use Mastodon or Bluesky, which need no API keys.</p>
+
+    <h2 id="php">11. PHP settings for video uploads</h2>
+    <p>PHP's default upload limit is too small for video. Open the site's <strong>Settings</strong> tab, scroll to <strong>PHP Settings</strong>, set these and click <strong>Save</strong>:</p>
+    <table>
+      <tr><th>Setting</th><th>Value</th></tr>
+      <tr><td>Memory Limit</td><td><code>256M</code></td></tr>
+      <tr><td>Max Execution Time</td><td><code>300</code></td></tr>
+      <tr><td>Post Max Size</td><td><code>256M</code></td></tr>
+      <tr><td>Upload Max Filesize</td><td><code>256M</code></td></tr>
+    </table>
+    <p>If large uploads still fail with "413 Request Entity Too Large", open the site's <strong>Vhost</strong> tab, find <code>client_max_body_size</code>, set it to <code>256M</code> and save.</p>
+
+    <h2 id="platforms">12. Connect your social networks</h2>
+    <p>Each network needs a free developer app that you create on its website, apart from Mastodon and Bluesky.</p>
+    <ol>
+      <li>In KreateMix, open <strong>Platform API keys</strong> (instance admins only).</li>
+      <li>Each network's panel shows a <strong>callback URL</strong> starting with <code>https://social.yourdomain.com/</code>. Copy it exactly into the developer app you create on that network's site.</li>
+      <li>Paste the app's ID and secret back into KreateMix and save.</li>
+      <li>Go to <strong>Accounts</strong> and connect.</li>
+    </ol>
+    <table>
+      <tr><th>Network</th><th>What you need</th></tr>
+      <tr><td>Mastodon, Bluesky</td><td>Nothing. Connect straight away (Bluesky uses an app password).</td></tr>
+      <tr><td>Facebook, Instagram, Threads</td><td>A Meta developer app</td></tr>
+      <tr><td>LinkedIn</td><td>A LinkedIn developer app</td></tr>
+      <tr><td>YouTube, Google Business</td><td>A Google Cloud OAuth client</td></tr>
+      <tr><td>X</td><td>An X developer app on an API plan with write access (paid)</td></tr>
+      <tr><td>TikTok, Pinterest</td><td>A developer app on their sites. TikTok posts privately until your app passes its audit.</td></tr>
+    </table>
+    <p>Meta, Google and TikTok ask for a privacy policy and terms page when you submit your app for review. KreateMix already serves them at <code>/privacy</code>, <code>/terms</code> and <code>/data-deletion</code>; edit them under <strong>Legal pages</strong>.</p>
+    <p>Optional extras, under <strong>Integrations</strong>: a mail server for emailed reports, an AI key, Canva, Google Drive and ad accounts. The <a href="https://github.com/kennethyork/KreateMix#readme">README</a> has notes for each.</p>
+
+    <h2 id="backups">13. Backups</h2>
+    <div class="warn"><p><strong>Always back up the settings file and the database together.</strong> The key in <code>.ht.kreatemix-config.php</code> decrypts the tokens stored in the database. Lose the key, and every account has to be reconnected.</p></div>
+    <h3>Automatic (recommended)</h3>
+    <p>In CloudPanel, go to <strong>Admin Area → Backups</strong>. Choose a storage provider (Amazon S3, Backblaze B2, Wasabi, Dropbox, Google Drive and others), connect it and turn on daily backups. CloudPanel backs up everything in <code>/home</code>, which includes both KreateMix files. Backblaze B2 costs well under $1 a month for a site this size.</p>
+    <h3>Manual</h3>
+    <p>From your own computer, download both files into the current folder:</p>
+    <pre><code>scp "kreatemix@YOUR_SERVER_IP:htdocs/.ht.kreatemix-*.sqlite" .
+scp "kreatemix@YOUR_SERVER_IP:htdocs/social.yourdomain.com/.ht.kreatemix-config.php" .</code></pre>
+    <p>To restore, upload both files to the same places on a new server.</p>
+
+    <h2 id="updates">14. Updating KreateMix</h2>
+    <p>Connect as the site user and download the new version over the old one. The database upgrades itself on the next visit.</p>
+    <pre><code>ssh kreatemix@YOUR_SERVER_IP
+cd ~/htdocs/social.yourdomain.com
+cp index.php index.php.bak
+curl -fsSLO https://raw.githubusercontent.com/kennethyork/KreateMix/main/index.php</code></pre>
+    <p>If anything goes wrong, put the old file back with <code>mv index.php.bak index.php</code>. Watch the <a href="https://github.com/kennethyork/KreateMix">GitHub repository</a> (Watch → Custom → Releases) to hear about new versions.</p>
+
+    <h2 id="harden">15. Extra security (recommended)</h2>
+    <p>These steps make the server much harder to break into. Do them once everything works.</p>
+    <h3>Sign in with an SSH key instead of a password</h3>
+    <p>On your own computer, create a key (press <kbd>Enter</kbd> at each question) and copy it to the server:</p>
+    <pre><code>ssh-keygen -t ed25519
+type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh root@YOUR_SERVER_IP "mkdir -p ~/.ssh &amp;&amp; cat &gt;&gt; ~/.ssh/authorized_keys"</code></pre>
+    <p>That second line is for Windows PowerShell. On Mac or Linux, use <code>ssh-copy-id root@YOUR_SERVER_IP</code> instead.</p>
+    <p>Check that <code>ssh root@YOUR_SERVER_IP</code> now logs in without asking for a password. Then turn off password logins for root:</p>
+    <pre><code>sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+systemctl restart ssh</code></pre>
+    <div class="note"><p>The site user can still sign in with its password for uploads and updates. You can add your key for it the same way in the site's <strong>SSH/FTP</strong> tab in CloudPanel.</p></div>
+    <h3>Use a strong KreateMix password</h3>
+    <p>Your KreateMix admin account can post to every connected social account, so give it a long, unique password from a password manager.</p>
+    <h3>Install updates monthly</h3>
+    <p>As root, run <code>apt update &amp;&amp; apt -y upgrade</code> about once a month, and reboot with <code>reboot</code> if it says a restart is required.</p>
+
+    <h2 id="trouble">16. Troubleshooting</h2>
+    <table>
+      <tr><th>Problem</th><th>Fix</th></tr>
+      <tr>
+        <td>Scheduled posts stay "scheduled" and never go out</td>
+        <td>The cron job isn't running. Check the command in step 10: the PHP version must match the site's, and the path must match your domain. Test it by connecting as the site user and running the command without <code>&gt;/dev/null 2&gt;&amp;1</code> to see any errors.</td>
+      </tr>
+      <tr>
+        <td>"Redirect URI mismatch" or similar when connecting an account</td>
+        <td>The callback URL registered with the network must match the one KreateMix shows exactly, including <code>https://</code>. If KreateMix shows the wrong address, open <code>.ht.kreatemix-config.php</code> in the File Manager and set <code>'app_url' =&gt; 'https://social.yourdomain.com'</code> (no trailing slash).</td>
+      </tr>
+      <tr>
+        <td>Instagram, Facebook or TikTok can't fetch your images</td>
+        <td>These networks download media from your server, so the site must be reachable from the internet over HTTPS. Check step 8, and that your provider's firewall allows ports 80 and 443.</td>
+      </tr>
+      <tr>
+        <td>"413 Request Entity Too Large", or uploads fail</td>
+        <td>Raise the limits in step 11, including <code>client_max_body_size</code> in the Vhost tab.</td>
+      </tr>
+      <tr>
+        <td>"500" or "502" error page</td>
+        <td>Look at the site's <strong>Logs</strong> tab in CloudPanel. If <code>index.php</code> was uploaded as root, fix the owner as root: <code>chown kreatemix:kreatemix /home/kreatemix/htdocs/social.yourdomain.com/index.php</code>.</td>
+      </tr>
+      <tr>
+        <td>Let's Encrypt certificate fails</td>
+        <td>Your domain doesn't point to the server yet. Wait for DNS (step 3), make sure Cloudflare is set to "DNS only", and try again.</td>
+      </tr>
+      <tr>
+        <td>Can't reach CloudPanel on port 8443</td>
+        <td>Your IP probably changed since you restricted the port. SSH is still open, so tunnel through it: run <code>ssh -L 8443:localhost:8443 root@YOUR_SERVER_IP</code>, open <code>https://localhost:8443</code>, and update the firewall rule from step 6 with your new IP.</td>
+      </tr>
+    </table>
+    <p>Still stuck? <a href="https://github.com/kennethyork/KreateMix/issues">Open an issue on GitHub</a> with what you tried and any error from the Logs tab.</p>
+  </article>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 Kenneth York · AGPL-3.0-or-later</span>
+    <span><a href="./">Home</a> · <a href="https://github.com/kennethyork/KreateMix">GitHub</a> · <a href="https://www.cloudpanel.io/docs/v2/">CloudPanel docs</a></span>
+  </div>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
