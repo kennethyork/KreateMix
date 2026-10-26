@@ -91,12 +91,7 @@ final class Publisher
             }
             $account = $target;
             $account['id'] = $accountId;
-            $provider = Registry::forAccount($account);
-
-            $newToken = $provider->refreshToken();
-            if ($newToken !== null) {
-                Db::update('accounts', ['token' => Crypt::encrypt($newToken), 'updated_at' => now()], 'id = ?', [$accountId]);
-            }
+            $provider = Registry::withFreshToken($account);
 
             $result = $provider->publish($text, $media);
             Db::update('post_accounts', [

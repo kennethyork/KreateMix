@@ -86,6 +86,37 @@ final class Registry
         return new $class(self::credentials($account['provider']), $account);
     }
 
+    /**
+     * Builds a provider for an account and refreshes its token if it's about to expire,
+     * saving the new token to this account and to sibling accounts that shared the old one
+     * (pages, boards, channels and locations connected in a single login).
+     */
+    public static function withFreshToken(array $account): Provider
+    {
+        $provider = self::forAccount($account);
+        $old = Crypt::decryptArray($account['token'] ?? null);
+        $new = $provider->refreshToken();
+        if ($new !== null) {
+            $enc = Crypt::encrypt($new);
+            Db::update('accounts', ['token' => $enc, 'authorized' => 1, 'updated_at' => now()], 'id = ?', [$account['id']]);
+            if (!empty($old['refresh_token']) || !empty($old['access_token'])) {
+                $siblings = Db::all(
+                    'SELECT id, token FROM accounts WHERE workspace_id = (SELECT workspace_id FROM accounts WHERE id = ?) AND provider = ? AND id != ?',
+                    [$account['id'], $account['provider'], $account['id']]
+                );
+                foreach ($siblings as $sib) {
+                    $t = Crypt::decryptArray($sib['token']);
+                    $same = (!empty($old['refresh_token']) && ($t['refresh_token'] ?? null) === $old['refresh_token'])
+                        || (($t['access_token'] ?? null) === ($old['access_token'] ?? false));
+                    if ($same) {
+                        Db::update('accounts', ['token' => $enc, 'updated_at' => now()], 'id = ?', [$sib['id']]);
+                    }
+                }
+            }
+        }
+        return $provider;
+    }
+
     public static function make(string $key): Provider
     {
         $class = self::class($key);

@@ -78,6 +78,24 @@ Set `'debug' => true` in `config.php` to see errors and enable the **Sandbox** p
 | `max_upload_mb` | Upload size limit. |
 | `debug` | Show errors and enable the Sandbox platform. |
 
+## Platform notes
+
+| Platform | Keys | Notes |
+|---|---|---|
+| X | OAuth 2.0 client ID/secret | Needs an API plan with write access. Images and video via chunked upload. |
+| Mastodon | none | Registers itself on each server automatically. |
+| Bluesky | none | Connect with a handle and an app password. Video goes through Bluesky's video service. |
+| Facebook Pages | App ID/secret | Each Page is its own account. |
+| Instagram | Instagram app ID/secret | Professional accounts only. PNG/WebP are converted to JPEG automatically. Single videos post as Reels. |
+| Threads | Threads app ID/secret | Text, images, video and carousels. |
+| LinkedIn | Client ID/secret | Personal profile; company pages too if your app has the Community Management API. |
+| YouTube | Google OAuth client | First line of the post is the title. |
+| TikTok | Client key/secret | Unaudited apps can only post privately. Photo posts need your domain verified with TikTok. |
+| Pinterest | App ID/secret | Each board is its own account. First line is the pin title; a link in the text becomes the pin link. |
+| Google Business Profile | Google OAuth client | Requires Google to grant API access. Each location is its own account. |
+
+Facebook, Instagram, Threads, TikTok photos and Google Business fetch media from your server by URL, so your install must be reachable from the internet (set `app_url`). API versions are constants at the top of each class in `src/Providers/` (e.g. `Facebook::VERSION`, `LinkedIn::VERSION`) if a platform retires one.
+
 ## REST API
 
 Create a token under **API & webhooks**. Tokens act as you, in that workspace, with your role.

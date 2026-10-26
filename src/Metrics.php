@@ -25,7 +25,7 @@ final class Metrics
                 continue;
             }
             try {
-                $provider = Registry::forAccount($account);
+                $provider = Registry::withFreshToken($account);
                 $m = $provider->accountMetrics();
                 if ($m) {
                     $followers = isset($m['followers']) ? (int) $m['followers'] : null;
@@ -55,6 +55,9 @@ final class Metrics
                 }
             } catch (\Throwable $e) {
                 $report['errors']++;
+                if ($e instanceof \App\Providers\ProviderException && $e->unauthorized) {
+                    Db::update('accounts', ['authorized' => 0, 'updated_at' => now()], 'id = ?', [$account['id']]);
+                }
                 log_event('warning', "Metrics import failed for account {$account['id']}: " . $e->getMessage());
             }
         }

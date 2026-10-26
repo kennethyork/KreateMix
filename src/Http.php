@@ -10,8 +10,18 @@ final class Http
      * @param array $options headers => [k => v], json => array, form => array, multipart => array, body => string, timeout => int
      * @return array{status:int, body:string, json:array, headers:array}
      */
+    /** Test hook: when set, receives (method, url, options) and returns a response array instead of calling cURL. */
+    public static ?\Closure $fake = null;
+
     public static function request(string $method, string $url, array $options = []): array
     {
+        if (self::$fake !== null) {
+            if (isset($options['query']) && $options['query']) {
+                $url .= (str_contains($url, '?') ? '&' : '?') . http_build_query($options['query']);
+            }
+            $r = (self::$fake)(strtoupper($method), $url, $options);
+            return $r + ['status' => 200, 'body' => json_encode($r['json'] ?? []), 'json' => [], 'headers' => []];
+        }
         $ch = curl_init();
         $headers = [];
         foreach ($options['headers'] ?? [] as $k => $v) {
@@ -54,6 +64,9 @@ final class Http
         ]);
         if ($body !== null) {
             curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        } elseif (in_array(strtoupper($method), ['POST', 'PUT', 'PATCH'], true)) {
+            // Send an explicit empty body so servers get Content-Length: 0.
+            curl_setopt($ch, CURLOPT_POSTFIELDS, '');
         }
 
         $raw = curl_exec($ch);
