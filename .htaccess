@@ -1,0 +1,10 @@
+# For hosts where you can't point the domain at /public: send everything there,
+# and keep config, database and source files unreachable.
+Options -Indexes
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+    RewriteRule ^(config\.php|config\.example\.php|cron\.php|src|views|storage|database|modules)(/|$) - [F,L]
+    RewriteRule ^(?!public/)(.*)$ public/$1 [L]
+</IfModule>
