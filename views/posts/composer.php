@@ -112,6 +112,9 @@ $data = [
                     <?php if (!$readonly): ?>
                     <div class="editor-toolbar">
                         <button type="button" class="tool" data-open-media title="Add media"><?= icon('image') ?><span>Media</span></button>
+                        <?php if ($aiEnabled): ?>
+                            <button type="button" class="tool tool-ai" data-open-dialog="ai-dialog" title="Write with AI"><?= icon('sparkles') ?><span>AI</span></button>
+                        <?php endif; ?>
                         <?php if ($hashtagGroups): ?>
                         <details class="dropdown">
                             <summary class="tool" title="Insert hashtags"><?= icon('hash') ?><span>Hashtags</span></summary>
@@ -175,6 +178,14 @@ $data = [
                         <input type="time" name="time" value="<?= e($time) ?>" <?= $dis ?>>
                     </label>
                 </div>
+                <?php if ($bestTimes): ?>
+                    <div class="best-chips">
+                        <span class="muted small"><?= icon('clock') ?> Your best times:</span>
+                        <?php foreach ($bestTimes as $bt): ?>
+                            <button type="button" class="chip" data-best-day="<?= (int) $bt['day'] ?>" data-best-hour="<?= (int) $bt['hour'] ?>"><?= e(substr(App\Analytics::dayName($bt['day']), 0, 3) . ' ' . App\Analytics::hourLabel($bt['hour'])) ?></button>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
 
                 <?php if ($tags || !$readonly): ?>
                 <fieldset class="field">
@@ -264,9 +275,35 @@ $data = [
         <small class="muted">JPG, PNG, GIF, WebP, MP4, MOV, WebM</small>
     </label>
     <div class="upload-progress" id="upload-progress"></div>
+    <?php if ($canvaEnabled): ?>
+        <div class="canva-bar">
+            <button type="button" class="btn btn-sm" data-canva-open><?= icon('palette') ?> Import from Canva</button>
+        </div>
+        <div class="canva-panel" id="canva-panel" hidden>
+            <div class="canva-head"><input type="search" id="canva-q" placeholder="Search your Canva designs"><button type="button" class="btn btn-sm" data-canva-close>Back to library</button></div>
+            <div class="media-grid" id="canva-grid"></div>
+            <div class="center"><button type="button" class="btn btn-sm" id="canva-more" hidden>Load more</button></div>
+        </div>
+    <?php endif; ?>
     <div class="media-grid" id="media-library"><p class="muted">Loading…</p></div>
     <div class="form-actions">
         <button type="button" class="btn" data-close-dialog>Cancel</button>
         <button type="button" class="btn btn-primary" id="media-insert">Add selected</button>
     </div>
 </dialog>
+
+<?php if ($aiEnabled && !$readonly): ?>
+<dialog id="ai-dialog" class="dialog dialog-wide">
+    <div class="dialog-head"><h2><?= icon('sparkles') ?> Write with AI</h2><button type="button" class="icon-btn" data-close-dialog aria-label="Close"><?= icon('x') ?></button></div>
+    <label class="field"><span>What should the post be about? <small class="muted">(for new posts and variations)</small></span>
+        <textarea id="ai-idea" rows="2" placeholder="e.g. Announce our spring sale, 20% off everything until Sunday"></textarea>
+    </label>
+    <div class="ai-actions">
+        <?php foreach (App\Ai::ACTIONS as $k => $label): ?>
+            <button type="button" class="btn btn-sm<?= $k === 'write' ? ' btn-primary' : '' ?>" data-ai-action="<?= e($k) ?>"><?= e($label) ?></button>
+        <?php endforeach; ?>
+    </div>
+    <p class="muted small">Improve, shorten and the other edits work on the text currently in the post. The character limit follows the accounts you’ve selected.</p>
+    <div id="ai-results" class="ai-results" aria-live="polite"></div>
+</dialog>
+<?php endif; ?>

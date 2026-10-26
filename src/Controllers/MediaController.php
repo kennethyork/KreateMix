@@ -55,11 +55,23 @@ final class MediaController
             $codes = [UPLOAD_ERR_INI_SIZE => 'The file is larger than the server allows (upload_max_filesize).', UPLOAD_ERR_FORM_SIZE => 'The file is too large.'];
             return ['error' => $codes[$file['error'] ?? 0] ?? 'No file was uploaded.'];
         }
+        return self::save($file['tmp_name'], (string) $file['name'], $workspaceId, $userId, true);
+    }
+
+    /** Saves a file already on disk (e.g. downloaded from Canva). The source file is copied. */
+    public static function storeLocal(string $path, string $name, int $workspaceId, int $userId): array
+    {
+        return self::save($path, $name, $workspaceId, $userId, false);
+    }
+
+    private static function save(string $tmp, string $origName, int $workspaceId, int $userId, bool $uploaded): array
+    {
+        $size = (int) filesize($tmp);
         $maxBytes = (int) Config::get('max_upload_mb', 200) * 1024 * 1024;
-        if ($file['size'] > $maxBytes) {
+        if ($size > $maxBytes) {
             return ['error' => 'The file is larger than ' . Config::get('max_upload_mb', 200) . ' MB.'];
         }
-        $mime = (new \finfo(FILEINFO_MIME_TYPE))->file($file['tmp_name']) ?: '';
+        $mime = (new \finfo(FILEINFO_MIME_TYPE))->file($tmp) ?: '';
         if (!isset(self::TYPES[$mime])) {
             return ['error' => 'Only JPG, PNG, GIF, WebP, MP4, MOV and WebM files are supported.'];
         }
@@ -69,24 +81,25 @@ final class MediaController
             mkdir(BASE_PATH . '/public/' . $dir, 0775, true);
         }
         $rel = $dir . '/' . bin2hex(random_bytes(12)) . '.' . $ext;
-        if (!move_uploaded_file($file['tmp_name'], BASE_PATH . '/public/' . $rel)) {
+        $ok = $uploaded ? move_uploaded_file($tmp, BASE_PATH . '/public/' . $rel) : copy($tmp, BASE_PATH . '/public/' . $rel);
+        if (!$ok) {
             return ['error' => 'Couldn’t save the file. Check that public/uploads is writable.'];
         }
         $w = $h = null;
         if (str_starts_with($mime, 'image/')) {
-            $size = @getimagesize(BASE_PATH . '/public/' . $rel);
-            if ($size) {
-                [$w, $h] = $size;
+            $dims = @getimagesize(BASE_PATH . '/public/' . $rel);
+            if ($dims) {
+                [$w, $h] = $dims;
             }
         }
-        $name = mb_substr(preg_replace('/[^\w.\- ]+/u', '', (string) $file['name']) ?: 'file.' . $ext, 0, 120);
+        $name = mb_substr(preg_replace('/[^\w.\- ]+/u', '', $origName) ?: 'file.' . $ext, 0, 120);
         $id = Db::insert('media', [
             'workspace_id' => $workspaceId,
             'user_id' => $userId,
             'path' => $rel,
             'name' => $name,
             'mime' => $mime,
-            'size' => (int) $file['size'],
+            'size' => $size,
             'width' => $w,
             'height' => $h,
             'created_at' => now(),

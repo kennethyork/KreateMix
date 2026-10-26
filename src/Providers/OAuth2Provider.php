@@ -143,6 +143,12 @@ abstract class OAuth2Provider extends Provider
         return $new;
     }
 
+    /** Current access token, for read-only lookups that borrow this account (e.g. competitor stats). */
+    public function lookupToken(): string
+    {
+        return $this->accessToken();
+    }
+
     protected function accessToken(): string
     {
         return (string) ($this->token()['access_token'] ?? '');

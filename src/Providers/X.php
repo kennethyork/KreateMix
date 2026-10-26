@@ -135,4 +135,42 @@ final class X extends OAuth2Provider
             'impressions' => (int) ($pm['impression_count'] ?? 0),
         ] : [];
     }
+
+    public static function supportsComments(): bool { return true; }
+
+    public function comments(string $providerPostId): array
+    {
+        $r = $this->api('GET', self::API . '/tweets/search/recent', ['query' => [
+            'query' => 'conversation_id:' . $providerPostId . ' is:reply',
+            'max_results' => 50,
+            'tweet.fields' => 'author_id,created_at,in_reply_to_user_id',
+            'expansions' => 'author_id',
+            'user.fields' => 'username,name,profile_image_url',
+        ]])['json'];
+        $users = array_column($r['includes']['users'] ?? [], null, 'id');
+        $me = $this->account['provider_id'] ?? '';
+        $out = [];
+        foreach ($r['data'] ?? [] as $t) {
+            $u = $users[$t['author_id']] ?? [];
+            $out[] = [
+                'id' => $t['id'],
+                'text' => $t['text'],
+                'author_name' => $u['name'] ?? '',
+                'author_handle' => $u['username'] ?? '',
+                'author_avatar' => $u['profile_image_url'] ?? null,
+                'created_at' => gmdate('Y-m-d H:i:s', strtotime($t['created_at'] ?? 'now')),
+                'url' => isset($u['username']) ? "https://x.com/{$u['username']}/status/{$t['id']}" : null,
+                'reply_ref' => $t['id'],
+                'own' => $t['author_id'] === $me,
+            ];
+        }
+        return array_reverse($out);
+    }
+
+    public function reply(array $item, string $text): array
+    {
+        $res = $this->api('POST', self::API . '/tweets', ['json' => ['text' => $text, 'reply' => ['in_reply_to_tweet_id' => $item['provider_item_id']]]]);
+        $id = (string) ($res['json']['data']['id'] ?? '');
+        return ['id' => $id, 'url' => $id ? 'https://x.com/' . ($this->account['username'] ?? 'i') . '/status/' . $id : null];
+    }
 }

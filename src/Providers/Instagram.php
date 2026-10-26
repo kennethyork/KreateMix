@@ -34,7 +34,7 @@ final class Instagram extends OAuth2Provider
 
     protected function authorizeEndpoint(): string { return 'https://www.instagram.com/oauth/authorize'; }
     protected function tokenEndpoint(): string { return 'https://api.instagram.com/oauth/access_token'; }
-    protected function scopes(): array { return ['instagram_business_basic', 'instagram_business_content_publish', 'instagram_business_manage_insights']; }
+    protected function scopes(): array { return ['instagram_business_basic', 'instagram_business_content_publish', 'instagram_business_manage_insights', 'instagram_business_manage_comments']; }
     protected function scopeSeparator(): string { return ','; }
 
     public function connect(array $input, string $redirectUri): array
@@ -153,6 +153,22 @@ final class Instagram extends OAuth2Provider
         return isset($me['followers_count']) ? ['followers' => (int) $me['followers_count'], 'following' => (int) ($me['follows_count'] ?? 0)] : [];
     }
 
+    public function audience(): array
+    {
+        $out = [];
+        foreach (['age', 'gender', 'country', 'city'] as $dim) {
+            try {
+                $r = $this->graph('GET', '/me/insights', ['metric' => 'follower_demographics', 'period' => 'lifetime', 'metric_type' => 'total_value', 'breakdown' => $dim]);
+            } catch (ProviderException) {
+                continue; // needs 100+ followers and the insights permission
+            }
+            foreach ($r['data'][0]['total_value']['breakdowns'][0]['results'] ?? [] as $row) {
+                $out[$dim][(string) ($row['dimension_values'][0] ?? '?')] = (int) ($row['value'] ?? 0);
+            }
+        }
+        return $out;
+    }
+
     public function postMetrics(string $providerPostId): array
     {
         $m = $this->graph('GET', '/' . $providerPostId, ['fields' => 'like_count,comments_count']);
@@ -171,5 +187,41 @@ final class Instagram extends OAuth2Provider
         } catch (ProviderException) {
         }
         return $out;
+    }
+
+    public static function supportsComments(): bool { return true; }
+
+    public function comments(string $providerPostId): array
+    {
+        $r = $this->graph('GET', '/' . $providerPostId . '/comments', ['fields' => 'id,text,username,timestamp,from{id,username},replies{id,text,username,timestamp,from{id}}', 'limit' => 50]);
+        $me = $this->account['provider_id'] ?? '';
+        $mine = $this->account['username'] ?? '';
+        $out = [];
+        $add = function (array $c) use (&$out, $me, $mine) {
+            $out[] = [
+                'id' => $c['id'],
+                'text' => $c['text'] ?? '',
+                'author_name' => $c['username'] ?? '',
+                'author_handle' => $c['username'] ?? '',
+                'author_avatar' => null,
+                'created_at' => gmdate('Y-m-d H:i:s', strtotime($c['timestamp'] ?? 'now')),
+                'url' => null,
+                'reply_ref' => '@' . ($c['username'] ?? ''),
+                'own' => ($c['from']['id'] ?? '') === $me || ($mine !== '' && ($c['username'] ?? '') === $mine),
+            ];
+        };
+        foreach ($r['data'] ?? [] as $c) {
+            $add($c);
+            foreach ($c['replies']['data'] ?? [] as $rep) {
+                $add($rep);
+            }
+        }
+        return $out;
+    }
+
+    public function reply(array $item, string $text): array
+    {
+        $r = $this->graph('POST', '/' . $item['provider_item_id'] . '/replies', ['message' => $text]);
+        return ['id' => (string) $r['id'], 'url' => null];
     }
 }

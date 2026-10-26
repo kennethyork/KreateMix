@@ -145,6 +145,9 @@ final class PostsController
             'needsApproval' => $ws['require_approval'] && !Workspace::can('admin'),
             'canApprove' => Workspace::can('admin'),
             'panels' => Hooks::filter('composer.panels', [], $post),
+            'bestTimes' => $readonly ? [] : \App\Analytics::bestTimes($wsId, array_map('intval', array_column(self::accounts(), 'id')), user_tz())['top'],
+            'aiEnabled' => \App\Ai::enabled(),
+            'canvaEnabled' => \App\Canva::enabled(),
         ]);
     }
 

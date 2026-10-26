@@ -34,7 +34,7 @@ final class YouTube extends OAuth2Provider
 
     protected function authorizeEndpoint(): string { return 'https://accounts.google.com/o/oauth2/v2/auth'; }
     protected function tokenEndpoint(): string { return 'https://oauth2.googleapis.com/token'; }
-    protected function scopes(): array { return ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly']; }
+    protected function scopes(): array { return ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly', 'https://www.googleapis.com/auth/youtube.force-ssl']; }
     protected function extraAuthParams(): array { return ['access_type' => 'offline', 'prompt' => 'consent', 'include_granted_scopes' => 'true']; }
 
     public function connect(array $input, string $redirectUri): array
@@ -102,5 +102,42 @@ final class YouTube extends OAuth2Provider
             'replies' => (int) ($s['commentCount'] ?? 0),
             'impressions' => (int) ($s['viewCount'] ?? 0),
         ] : [];
+    }
+
+    public static function supportsComments(): bool { return true; }
+
+    public function comments(string $providerPostId): array
+    {
+        $r = $this->api('GET', self::API . '/commentThreads', ['query' => ['part' => 'snippet,replies', 'videoId' => $providerPostId, 'maxResults' => 100, 'order' => 'time', 'textFormat' => 'plainText']])['json'];
+        $me = $this->account['provider_id'] ?? '';
+        $out = [];
+        $add = function (array $c, string $threadId) use (&$out, $me, $providerPostId) {
+            $sn = $c['snippet'] ?? [];
+            $out[] = [
+                'id' => $c['id'],
+                'text' => $sn['textDisplay'] ?? $sn['textOriginal'] ?? '',
+                'author_name' => $sn['authorDisplayName'] ?? '',
+                'author_handle' => ltrim((string) ($sn['authorDisplayName'] ?? ''), '@'),
+                'author_avatar' => $sn['authorProfileImageUrl'] ?? null,
+                'created_at' => gmdate('Y-m-d H:i:s', strtotime($sn['publishedAt'] ?? 'now')),
+                'url' => 'https://www.youtube.com/watch?v=' . $providerPostId . '&lc=' . $c['id'],
+                'reply_ref' => $threadId,
+                'own' => ($sn['authorChannelId']['value'] ?? '') === $me,
+            ];
+        };
+        foreach ($r['items'] ?? [] as $t) {
+            $add($t['snippet']['topLevelComment'] ?? [], $t['id']);
+            foreach ($t['replies']['comments'] ?? [] as $rep) {
+                $add($rep, $t['id']);
+            }
+        }
+        usort($out, fn($a, $b) => strcmp($a['created_at'], $b['created_at']));
+        return $out;
+    }
+
+    public function reply(array $item, string $text): array
+    {
+        $r = $this->api('POST', self::API . '/comments', ['query' => ['part' => 'snippet'], 'json' => ['snippet' => ['parentId' => $item['reply_ref'] ?: $item['provider_item_id'], 'textOriginal' => $text]]])['json'];
+        return ['id' => (string) ($r['id'] ?? ''), 'url' => null];
     }
 }

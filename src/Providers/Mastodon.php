@@ -148,4 +148,38 @@ final class Mastodon extends OAuth2Provider
         $s = $this->api('GET', $this->base() . '/api/v1/statuses/' . rawurlencode($providerPostId))['json'];
         return ['likes' => (int) ($s['favourites_count'] ?? 0), 'replies' => (int) ($s['replies_count'] ?? 0), 'shares' => (int) ($s['reblogs_count'] ?? 0)];
     }
+
+    public static function supportsComments(): bool { return true; }
+
+    public function comments(string $providerPostId): array
+    {
+        $ctx = $this->api('GET', $this->base() . '/api/v1/statuses/' . rawurlencode($providerPostId) . '/context')['json'];
+        $me = (string) ($this->accountData()['account_id'] ?? '');
+        $out = [];
+        foreach ($ctx['descendants'] ?? [] as $s) {
+            $a = $s['account'] ?? [];
+            $out[] = [
+                'id' => (string) $s['id'],
+                'text' => trim(html_entity_decode(strip_tags(str_replace(['<br>', '<br />', '</p><p>'], "\n", $s['content'] ?? '')), ENT_QUOTES | ENT_HTML5, 'UTF-8')),
+                'author_name' => ($a['display_name'] ?? '') ?: ($a['username'] ?? ''),
+                'author_handle' => $a['acct'] ?? '',
+                'author_avatar' => $a['avatar'] ?? null,
+                'created_at' => gmdate('Y-m-d H:i:s', strtotime($s['created_at'] ?? 'now')),
+                'url' => $s['url'] ?? null,
+                'reply_ref' => '@' . ($a['acct'] ?? ''),
+                'own' => (string) ($a['id'] ?? '') === $me,
+            ];
+        }
+        return $out;
+    }
+
+    public function reply(array $item, string $text): array
+    {
+        $mention = $item['reply_ref'] ?? '';
+        if ($mention !== '' && $mention !== '@' && !str_contains($text, $mention)) {
+            $text = $mention . ' ' . $text;
+        }
+        $res = $this->api('POST', $this->base() . '/api/v1/statuses', ['json' => ['status' => $text, 'in_reply_to_id' => $item['provider_item_id'], 'visibility' => 'public']]);
+        return ['id' => (string) $res['json']['id'], 'url' => $res['json']['url'] ?? null];
+    }
 }

@@ -35,7 +35,7 @@ final class Facebook extends OAuth2Provider
 
     protected function authorizeEndpoint(): string { return 'https://www.facebook.com/' . self::VERSION . '/dialog/oauth'; }
     protected function tokenEndpoint(): string { return self::GRAPH . '/oauth/access_token'; }
-    protected function scopes(): array { return ['pages_show_list', 'pages_read_engagement', 'pages_manage_posts', 'read_insights']; }
+    protected function scopes(): array { return ['pages_show_list', 'pages_read_engagement', 'pages_manage_posts', 'pages_manage_engagement', 'pages_read_user_content', 'read_insights', 'instagram_basic']; }
     protected function scopeSeparator(): string { return ','; }
 
     public function connect(array $input, string $redirectUri): array
@@ -132,5 +132,34 @@ final class Facebook extends OAuth2Provider
             'replies' => (int) ($p['comments']['summary']['total_count'] ?? 0),
             'shares' => (int) ($p['shares']['count'] ?? 0),
         ];
+    }
+
+    public static function supportsComments(): bool { return true; }
+
+    public function comments(string $providerPostId): array
+    {
+        $r = $this->graph('GET', '/' . $providerPostId . '/comments', ['fields' => 'id,message,from{id,name,picture},created_time,permalink_url', 'filter' => 'stream', 'limit' => 100]);
+        $me = $this->account['provider_id'] ?? '';
+        $out = [];
+        foreach ($r['data'] ?? [] as $c) {
+            $out[] = [
+                'id' => $c['id'],
+                'text' => $c['message'] ?? '',
+                'author_name' => $c['from']['name'] ?? 'Facebook user',
+                'author_handle' => '',
+                'author_avatar' => $c['from']['picture']['data']['url'] ?? null,
+                'created_at' => gmdate('Y-m-d H:i:s', strtotime($c['created_time'] ?? 'now')),
+                'url' => $c['permalink_url'] ?? null,
+                'reply_ref' => $c['id'],
+                'own' => ($c['from']['id'] ?? '') === $me,
+            ];
+        }
+        return $out;
+    }
+
+    public function reply(array $item, string $text): array
+    {
+        $r = $this->graph('POST', '/' . $item['provider_item_id'] . '/comments', ['message' => $text]);
+        return ['id' => (string) $r['id'], 'url' => null];
     }
 }

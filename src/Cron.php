@@ -15,9 +15,25 @@ final class Cron
         touch(BASE_PATH . '/storage/cron.stamp');
         set_time_limit(0);
 
-        $report = ['posts' => Publisher::runDue()];
-        $report['webhooks'] = Webhooks::deliverPending();
-        $report['metrics'] = Metrics::import();
+        // Each job is isolated so one failing integration can't stop publishing or the others.
+        $report = [];
+        $jobs = [
+            'posts' => fn() => Publisher::runDue(),
+            'webhooks' => fn() => Webhooks::deliverPending(),
+            'metrics' => fn() => Metrics::import(),
+            'inbox' => fn() => Inbox::fetchDue(),
+            'competitors' => fn() => Competitors::refreshDue(),
+            'ads' => fn() => Ads::importDue(),
+            'reports' => fn() => Reports::sendDue(),
+        ];
+        foreach ($jobs as $name => $job) {
+            try {
+                $report[$name] = $job();
+            } catch (\Throwable $e) {
+                $report[$name] = ['error' => $e->getMessage()];
+                log_event('error', "Cron job $name failed: " . $e->getMessage());
+            }
+        }
         Hooks::fire('cron', $report);
 
         // Housekeeping once a day.

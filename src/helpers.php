@@ -25,6 +25,9 @@ function base_path(): string
     $appUrl = (string) Config::get('app_url', '');
     if ($appUrl !== '') {
         $base = rtrim((string) parse_url($appUrl, PHP_URL_PATH), '/');
+    } elseif (PHP_SAPI === 'cli-server' || PHP_SAPI === 'cli') {
+        // The built-in server sets SCRIPT_NAME to the request path for URLs with a file extension.
+        $base = '';
     } else {
         $dir = str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/'));
         $dir = preg_replace('#/public$#', '', $dir);

@@ -37,6 +37,13 @@ final class Metrics
                     );
                     $report['accounts']++;
                 }
+                // Demographics change slowly; take one snapshot a day.
+                if (!Db::value('SELECT 1 FROM account_audience WHERE account_id = ? AND date = ?', [$account['id'], $today])) {
+                    $aud = $provider->audience();
+                    if ($aud) {
+                        Db::insert('account_audience', ['account_id' => $account['id'], 'date' => $today, 'data' => json_encode($aud)]);
+                    }
+                }
                 $posts = Db::all(
                     "SELECT post_id, provider_post_id FROM post_accounts
                      WHERE account_id = ? AND status = 'published' AND provider_post_id IS NOT NULL AND provider_post_id != '' AND published_at >= ?",

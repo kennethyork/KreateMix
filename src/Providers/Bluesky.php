@@ -241,4 +241,57 @@ final class Bluesky extends Provider
             'shares' => (int) ($p['repostCount'] ?? 0) + (int) ($p['quoteCount'] ?? 0),
         ] : [];
     }
+
+    public static function supportsComments(): bool { return true; }
+
+    public function comments(string $providerPostId): array
+    {
+        $r = Http::get(self::PUBLIC_API . '/xrpc/app.bsky.feed.getPostThread', ['query' => ['uri' => $providerPostId, 'depth' => 1, 'parentHeight' => 0]]);
+        $thread = $r['json']['thread'] ?? [];
+        $root = $thread['post'] ?? null;
+        $me = $this->accountData()['did'] ?? $this->account['provider_id'] ?? '';
+        $out = [];
+        foreach ($thread['replies'] ?? [] as $rep) {
+            $p = $rep['post'] ?? null;
+            if (!$p) {
+                continue;
+            }
+            $a = $p['author'] ?? [];
+            $rkey = substr($p['uri'], strrpos($p['uri'], '/') + 1);
+            $out[] = [
+                'id' => $p['uri'],
+                'text' => $p['record']['text'] ?? '',
+                'author_name' => ($a['displayName'] ?? '') ?: ($a['handle'] ?? ''),
+                'author_handle' => $a['handle'] ?? '',
+                'author_avatar' => $a['avatar'] ?? null,
+                'created_at' => gmdate('Y-m-d H:i:s', strtotime($p['record']['createdAt'] ?? $p['indexedAt'] ?? 'now')),
+                'url' => 'https://bsky.app/profile/' . ($a['handle'] ?? '') . '/post/' . $rkey,
+                'reply_ref' => json_encode(['uri' => $p['uri'], 'cid' => $p['cid'], 'root_uri' => $root['uri'] ?? $p['uri'], 'root_cid' => $root['cid'] ?? $p['cid']]),
+                'own' => ($a['did'] ?? '') === $me,
+            ];
+        }
+        usort($out, fn($a, $b) => strcmp($a['created_at'], $b['created_at']));
+        return $out;
+    }
+
+    public function reply(array $item, string $text): array
+    {
+        $ref = json_decode((string) $item['reply_ref'], true) ?: [];
+        if (empty($ref['uri'])) {
+            throw new ProviderException('Missing reply reference.');
+        }
+        $s = $this->session();
+        $record = [
+            '$type' => 'app.bsky.feed.post',
+            'text' => $text,
+            'createdAt' => gmdate('Y-m-d\TH:i:s.v\Z'),
+            'reply' => ['root' => ['uri' => $ref['root_uri'], 'cid' => $ref['root_cid']], 'parent' => ['uri' => $ref['uri'], 'cid' => $ref['cid']]],
+        ];
+        if ($facets = $this->facets($text)) {
+            $record['facets'] = $facets;
+        }
+        $res = $this->xrpc('POST', 'com.atproto.repo.createRecord', ['json' => ['repo' => $s['did'], 'collection' => 'app.bsky.feed.post', 'record' => $record]]);
+        $rkey = substr($res['uri'], strrpos($res['uri'], '/') + 1);
+        return ['id' => $res['uri'], 'url' => 'https://bsky.app/profile/' . $s['handle'] . '/post/' . $rkey];
+    }
 }

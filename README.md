@@ -10,7 +10,15 @@ Self-hosted social media scheduling, written in plain PHP, HTML, CSS and JavaScr
 - **Teams** — admin, member and viewer roles, invite links (no mail server needed)
 - **Approvals** — optionally require an admin to approve members' posts
 - **Library** — templates, hashtag groups, `{{variables}}`, tags
-- **Analytics** — follower growth, posts per day, top posts by engagement
+- **Analytics** — followers, engagement rate, impressions, per-network and per-account breakdowns, formats and hashtags that perform, top posts, audience demographics (Instagram, Threads)
+- **Best time to post** — a day × hour heatmap from your own engagement, with one-click suggestions in the composer
+- **Reports** — PDF download, client share links (no login), and weekly or monthly reports emailed with the PDF attached
+- **Competitors** — track public accounts on X, Bluesky, Mastodon, Instagram and YouTube: followers, growth, posting frequency, average engagement
+- **Inbox** — comments on your posts from X, Mastodon, Bluesky, Facebook, Instagram, Threads and YouTube, with replies sent from MixCreate
+- **Link in bio** — a public page per workspace with links, social icons, a recent-posts grid and click tracking
+- **Ads** — spend, impressions, clicks, CTR, CPC and conversions from Meta, Google and TikTok ad accounts
+- **AI writing** — write, rewrite, shorten, add hashtags or get variations, using OpenAI, any OpenAI-compatible server (including local Ollama or LM Studio) or Anthropic
+- **Canva** — import designs straight into the media library
 - **REST API** — bearer tokens; create, schedule, approve posts and upload media
 - **Webhooks** — signed with HMAC-SHA256, retried with backoff
 - **Platforms** — X, Mastodon, Bluesky, Facebook Pages, Instagram, LinkedIn, YouTube, Threads, TikTok, Pinterest, Google Business Profile
@@ -37,7 +45,8 @@ Self-hosted social media scheduling, written in plain PHP, HTML, CSS and JavaScr
 
    No cron access? Call `https://your-site/cron?key=CRON_KEY` every minute from any uptime or cron service. `CRON_KEY` is in `config.php`.
 
-6. As the admin, open **Platform API keys** and add keys for the platforms you want. Each one shows the callback URL to register with the platform. Mastodon and Bluesky need no keys.
+6. Optional: under **Integrations**, add a mail server (for emailed reports), an AI provider, Canva, and ads platform keys.
+7. As the admin, open **Platform API keys** and add keys for the platforms you want. Each one shows the callback URL to register with the platform. Mastodon and Bluesky need no keys.
 
 ### Nginx
 
@@ -95,6 +104,13 @@ Set `'debug' => true` in `config.php` to see errors and enable the **Sandbox** p
 | Google Business Profile | Google OAuth client | Requires Google to grant API access. Each location is its own account. |
 
 Facebook, Instagram, Threads, TikTok photos and Google Business fetch media from your server by URL, so your install must be reachable from the internet (set `app_url`). API versions are constants at the top of each class in `src/Providers/` (e.g. `Facebook::VERSION`, `LinkedIn::VERSION`) if a platform retires one.
+
+### Integrations notes
+
+- **Inbox** covers comments and replies, not direct messages; DM access needs separate app reviews on every platform. X comment search needs an API plan that includes recent search.
+- **Competitors**: X, Instagram and YouTube lookups borrow one of the workspace's connected accounts on that network. Instagram needs a connected Facebook Page that is linked to an Instagram business account.
+- **Ads**: Google Ads needs a developer token; Meta needs the `ads_read` permission; TikTok needs a TikTok for Business developer app.
+- **AI** sends post text to the provider you configure. Point it at a local Ollama or LM Studio server to keep everything on your own hardware.
 
 ## REST API
 

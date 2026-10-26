@@ -108,6 +108,36 @@ abstract class Provider
         return [];
     }
 
+    /**
+     * Audience breakdowns where the platform offers them:
+     * ['age' => [label => count], 'gender' => [...], 'country' => [...], 'city' => [...]]
+     */
+    public function audience(): array
+    {
+        return [];
+    }
+
+    /** True when comments() and reply() are implemented. */
+    public static function supportsComments(): bool
+    {
+        return false;
+    }
+
+    /**
+     * Comments/replies on a published post, newest last:
+     * [['id', 'text', 'author_name', 'author_handle', 'author_avatar', 'created_at' (UTC Y-m-d H:i:s), 'url', 'reply_ref', 'own' => bool]]
+     */
+    public function comments(string $providerPostId): array
+    {
+        return [];
+    }
+
+    /** Replies to a comment returned by comments(). $item has provider_item_id, root_ref and reply_ref. */
+    public function reply(array $item, string $text): array
+    {
+        throw new ProviderException(static::name() . ' doesn’t support replies from MixCreate.');
+    }
+
     /** Returns metrics for one published post, e.g. ['likes' => 3, 'replies' => 1]. */
     public function postMetrics(string $providerPostId): array
     {

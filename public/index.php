@@ -4,6 +4,14 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 
 use App\Controllers\AccountsController;
+use App\Controllers\AdsController;
+use App\Controllers\AiController;
+use App\Controllers\BioController;
+use App\Controllers\CanvaController;
+use App\Controllers\CompetitorsController;
+use App\Controllers\InboxController;
+use App\Controllers\IntegrationsController;
+use App\Controllers\ReportsController;
 use App\Controllers\AnalyticsController;
 use App\Controllers\ApiController;
 use App\Controllers\AuthController;
@@ -66,6 +74,11 @@ $r->post('/logout', [AuthController::class, 'logout'], ['auth']);
 
 $r->get('/cron', [CronController::class, 'run']);
 
+// Public pages: shared reports and link-in-bio.
+$r->get('/r/{token}', [ReportsController::class, 'public']);
+$r->get('/@{slug}', [BioController::class, 'show']);
+$r->get('/@{slug}/l/{id}', [BioController::class, 'go']);
+
 $r->group(['auth'], function (Router $r) {
     $r->get('/workspaces/new', [WorkspacesController::class, 'create']);
     $r->post('/workspaces', [WorkspacesController::class, 'store']);
@@ -77,6 +90,10 @@ $r->group(['auth'], function (Router $r) {
     $r->group(['admin'], function (Router $r) {
         $r->get('/admin/services', [ServicesController::class, 'index']);
         $r->post('/admin/services/{provider}', [ServicesController::class, 'update']);
+        $r->get('/admin/integrations', [IntegrationsController::class, 'index']);
+        $r->post('/admin/integrations/smtp/test', [IntegrationsController::class, 'testEmail']);
+        $r->post('/admin/integrations/ai/test', [IntegrationsController::class, 'testAi']);
+        $r->post('/admin/integrations/{group}', [IntegrationsController::class, 'save']);
         $r->get('/admin/users', [UsersController::class, 'index']);
         $r->post('/admin/users/{id}/delete', [UsersController::class, 'delete']);
         $r->post('/admin/users/{id}/admin', [UsersController::class, 'toggleAdmin']);
@@ -99,6 +116,47 @@ $r->group(['auth'], function (Router $r) {
         $r->post('/media/{id}/delete', [MediaController::class, 'delete'], ['role:member']);
 
         $r->get('/analytics', [AnalyticsController::class, 'index']);
+
+        $r->get('/reports', [ReportsController::class, 'index']);
+        $r->get('/reports/pdf', [ReportsController::class, 'pdf']);
+        $r->post('/reports/share', [ReportsController::class, 'share'], ['role:member']);
+        $r->post('/reports/shares/{id}/revoke', [ReportsController::class, 'revokeShare'], ['role:member']);
+        $r->post('/reports/schedules', [ReportsController::class, 'saveSchedule'], ['role:member']);
+        $r->post('/reports/schedules/{id}/delete', [ReportsController::class, 'deleteSchedule'], ['role:member']);
+        $r->post('/reports/schedules/{id}/send', [ReportsController::class, 'sendNow'], ['role:member']);
+
+        $r->get('/competitors', [CompetitorsController::class, 'index']);
+        $r->post('/competitors', [CompetitorsController::class, 'store'], ['role:member']);
+        $r->post('/competitors/{id}/delete', [CompetitorsController::class, 'delete'], ['role:member']);
+        $r->post('/competitors/{id}/refresh', [CompetitorsController::class, 'refresh'], ['role:member']);
+
+        $r->get('/inbox', [InboxController::class, 'index']);
+        $r->post('/inbox/refresh', [InboxController::class, 'refresh']);
+        $r->post('/inbox/read-all', [InboxController::class, 'markAllRead'], ['role:member']);
+        $r->post('/inbox/{id}/reply', [InboxController::class, 'reply'], ['role:member']);
+        $r->post('/inbox/{id}/status', [InboxController::class, 'status'], ['role:member']);
+
+        $r->get('/bio', [BioController::class, 'edit']);
+        $r->post('/bio', [BioController::class, 'update'], ['role:member']);
+        $r->post('/bio/links', [BioController::class, 'addLink'], ['role:member']);
+        $r->post('/bio/links/reorder', [BioController::class, 'reorder'], ['role:member']);
+        $r->post('/bio/links/{id}', [BioController::class, 'updateLink'], ['role:member']);
+        $r->post('/bio/links/{id}/delete', [BioController::class, 'deleteLink'], ['role:member']);
+
+        $r->get('/ads', [AdsController::class, 'index']);
+        $r->get('/ads/connect/{provider}', [AdsController::class, 'connect'], ['role:admin']);
+        $r->get('/ads/callback/{provider}', [AdsController::class, 'callback'], ['role:admin']);
+        $r->get('/ads/choose', [AdsController::class, 'choose'], ['role:admin']);
+        $r->post('/ads/choose', [AdsController::class, 'chooseSubmit'], ['role:admin']);
+        $r->post('/ads/{id}/sync', [AdsController::class, 'sync'], ['role:admin']);
+        $r->post('/ads/{id}/delete', [AdsController::class, 'delete'], ['role:admin']);
+
+        $r->post('/ai/assist', [AiController::class, 'assist'], ['role:member']);
+        $r->get('/canva/connect', [CanvaController::class, 'connect'], ['role:member']);
+        $r->get('/canva/callback', [CanvaController::class, 'callback'], ['role:member']);
+        $r->post('/canva/disconnect', [CanvaController::class, 'disconnect']);
+        $r->get('/canva/designs', [CanvaController::class, 'designs'], ['role:member']);
+        $r->post('/canva/import', [CanvaController::class, 'import'], ['role:member']);
 
         $r->get('/accounts', [AccountsController::class, 'index']);
         $r->get('/accounts/connect/{provider}', [AccountsController::class, 'connect'], ['role:admin']);

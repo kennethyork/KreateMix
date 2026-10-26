@@ -34,7 +34,7 @@ final class Threads extends OAuth2Provider
 
     protected function authorizeEndpoint(): string { return 'https://threads.net/oauth/authorize'; }
     protected function tokenEndpoint(): string { return 'https://graph.threads.net/oauth/access_token'; }
-    protected function scopes(): array { return ['threads_basic', 'threads_content_publish', 'threads_manage_insights']; }
+    protected function scopes(): array { return ['threads_basic', 'threads_content_publish', 'threads_manage_insights', 'threads_read_replies', 'threads_manage_replies']; }
     protected function scopeSeparator(): string { return ','; }
 
     public function connect(array $input, string $redirectUri): array
@@ -151,6 +151,22 @@ final class Threads extends OAuth2Provider
         return [];
     }
 
+    public function audience(): array
+    {
+        $out = [];
+        foreach (['age', 'gender', 'country', 'city'] as $dim) {
+            try {
+                $r = $this->graph('GET', '/' . $this->account['provider_id'] . '/threads_insights', ['metric' => 'follower_demographics', 'breakdown' => $dim]);
+            } catch (ProviderException) {
+                continue;
+            }
+            foreach ($r['data'][0]['total_value']['breakdowns'][0]['results'] ?? [] as $row) {
+                $out[$dim][(string) ($row['dimension_values'][0] ?? '?')] = (int) ($row['value'] ?? 0);
+            }
+        }
+        return $out;
+    }
+
     public function postMetrics(string $providerPostId): array
     {
         $r = $this->graph('GET', '/' . $providerPostId . '/insights', ['metric' => 'views,likes,replies,reposts,quotes']);
@@ -164,5 +180,36 @@ final class Threads extends OAuth2Provider
             'shares' => ($v['reposts'] ?? 0) + ($v['quotes'] ?? 0),
             'impressions' => $v['views'] ?? 0,
         ] : [];
+    }
+
+    public static function supportsComments(): bool { return true; }
+
+    public function comments(string $providerPostId): array
+    {
+        $r = $this->graph('GET', '/' . $providerPostId . '/replies', ['fields' => 'id,text,username,timestamp,permalink,is_reply_owned_by_me', 'reverse' => 'false']);
+        $out = [];
+        foreach ($r['data'] ?? [] as $c) {
+            $out[] = [
+                'id' => $c['id'],
+                'text' => $c['text'] ?? '',
+                'author_name' => $c['username'] ?? '',
+                'author_handle' => $c['username'] ?? '',
+                'author_avatar' => null,
+                'created_at' => gmdate('Y-m-d H:i:s', strtotime($c['timestamp'] ?? 'now')),
+                'url' => $c['permalink'] ?? null,
+                'reply_ref' => $c['id'],
+                'own' => !empty($c['is_reply_owned_by_me']),
+            ];
+        }
+        return $out;
+    }
+
+    public function reply(array $item, string $text): array
+    {
+        $uid = $this->account['provider_id'];
+        $container = (string) $this->graph('POST', "/$uid/threads", ['media_type' => 'TEXT', 'text' => $text, 'reply_to_id' => $item['provider_item_id']])['id'];
+        $this->waitReady($container);
+        $id = (string) $this->graph('POST', "/$uid/threads_publish", ['creation_id' => $container])['id'];
+        return ['id' => $id, 'url' => null];
     }
 }

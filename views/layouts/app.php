@@ -11,14 +11,20 @@ $path = '/' . trim(substr((string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP
 $pending = $ws && Workspace::can('admin')
     ? (int) Db::value("SELECT COUNT(*) FROM posts WHERE workspace_id = ? AND status = 'pending_approval'", [$ws['id']])
     : 0;
+$unread = $ws ? (int) Db::value("SELECT COUNT(*) FROM inbox_items WHERE workspace_id = ? AND status = 'new'", [$ws['id']]) : 0;
 
 $nav = Hooks::filter('nav', [
     ['label' => 'Dashboard', 'href' => '/', 'icon' => 'home', 'match' => '#^/$#'],
     ['label' => 'Calendar', 'href' => '/calendar', 'icon' => 'calendar', 'match' => '#^/calendar#'],
     ['label' => 'Posts', 'href' => '/posts', 'icon' => 'list', 'match' => '#^/posts(?!/new)#', 'badge' => $pending ?: null],
+    ['label' => 'Inbox', 'href' => '/inbox', 'icon' => 'inbox', 'match' => '#^/inbox#', 'badge' => $unread ?: null],
     ['label' => 'Analytics', 'href' => '/analytics', 'icon' => 'chart', 'match' => '#^/analytics#'],
+    ['label' => 'Reports', 'href' => '/reports', 'icon' => 'file', 'match' => '#^/reports#'],
+    ['label' => 'Competitors', 'href' => '/competitors', 'icon' => 'target', 'match' => '#^/competitors#'],
+    ['label' => 'Ads', 'href' => '/ads', 'icon' => 'megaphone', 'match' => '#^/ads#'],
     ['label' => 'Media', 'href' => '/media', 'icon' => 'image', 'match' => '#^/media#'],
     ['label' => 'Library', 'href' => '/library', 'icon' => 'book', 'match' => '#^/library#'],
+    ['label' => 'Link in bio', 'href' => '/bio', 'icon' => 'link', 'match' => '#^/bio#'],
     ['label' => 'Accounts', 'href' => '/accounts', 'icon' => 'users', 'match' => '#^/accounts#'],
 ]);
 $wsNav = [
@@ -30,6 +36,7 @@ if (Workspace::can('admin')) {
 }
 $adminNav = Auth::isAdmin() ? [
     ['label' => 'Platform API keys', 'href' => '/admin/services', 'icon' => 'key', 'match' => '#^/admin/services#'],
+    ['label' => 'Integrations', 'href' => '/admin/integrations', 'icon' => 'plug', 'match' => '#^/admin/integrations#'],
     ['label' => 'Users & workspaces', 'href' => '/admin/users', 'icon' => 'shield', 'match' => '#^/admin/users#'],
 ] : [];
 

@@ -164,7 +164,7 @@
     }
 
     /* ---------- Charts (inline SVG) ---------- */
-    $$('[data-chart]').forEach((el) => {
+    $$('[data-chart]:not([data-chart="spark"])').forEach((el) => {
         const series = JSON.parse(el.dataset.series || '[]');
         const type = el.dataset.chart;
         const pts = series.filter((s) => s.value !== null);
@@ -180,7 +180,7 @@
         const n = series.length;
         const x = (i) => padL + (n === 1 ? (W - padL - padR) / 2 : i * (W - padL - padR) / (n - 1));
         const y = (v) => padT + (H - padT - padB) * (1 - (v - min) / (max - min || 1));
-        const fmt = (v) => v >= 10000 ? (v / 1000).toFixed(1) + 'k' : Math.round(v).toLocaleString();
+        const fmt = (v) => v >= 10000 ? (v / 1000).toFixed(1) + 'k' : (max - min <= 8 && v % 1 ? v.toFixed(1) : Math.round(v).toLocaleString());
         let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(el.dataset.label)} chart"><g class="grid">`;
         const ticks = 4;
         for (let t = 0; t <= ticks; t++) {
@@ -233,6 +233,147 @@
         });
         svgEl.addEventListener('mouseleave', () => { tip.hidden = true; });
     });
+
+
+    /* ---------- Canva design browser (composer media dialog and media page) ---------- */
+    function canvaBrowser({ grid, q, more, back, onImport }) {
+        let continuation = null;
+        let timer = null;
+        async function load(reset) {
+            if (reset) { continuation = null; grid.innerHTML = '<p class="muted">Loading…</p>'; }
+            try {
+                const r = await api('/canva/designs' + '?' + new URLSearchParams({ q: q.value, continuation: continuation || '' }));
+                if (!r.connected) {
+                    grid.innerHTML = `<div class="empty-state"><p class="muted">Connect your Canva account to import designs.</p><a class="btn btn-primary" href="${base}/canva/connect?back=${encodeURIComponent(back)}">Connect Canva</a></div>`;
+                    more.hidden = true;
+                    return;
+                }
+                if (reset) grid.innerHTML = '';
+                r.items.forEach((d) => {
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = 'media-pick canva-design';
+                    b.title = d.title;
+                    b.innerHTML = (d.thumbnail ? `<img src="${esc(d.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '<span class="muted small">No preview</span>') + `<span class="canva-title">${esc(d.title)}</span>`;
+                    b.addEventListener('click', async () => {
+                        b.classList.add('busy');
+                        b.disabled = true;
+                        try {
+                            const res = await api('/canva/import', { method: 'POST', body: { design: d.id, format: 'png', _token: csrf() } });
+                            onImport(res.media);
+                        } catch (err) { toast(err.message, 'error'); }
+                        b.classList.remove('busy');
+                        b.disabled = false;
+                    });
+                    grid.appendChild(b);
+                });
+                if (!grid.children.length) grid.innerHTML = '<p class="muted">No designs found.</p>';
+                continuation = r.continuation;
+                more.hidden = !continuation;
+            } catch (err) {
+                grid.innerHTML = `<p class="error-text">${esc(err.message)}</p>`;
+            }
+        }
+        q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => load(true), 350); });
+        more.addEventListener('click', () => load(false));
+        load(true);
+        return { load };
+    }
+
+    const canvaPageBtn = $('[data-canva-page]');
+    if (canvaPageBtn) {
+        let started = false;
+        canvaPageBtn.addEventListener('click', () => {
+            if (started) return;
+            started = true;
+            canvaBrowser({ grid: $('#canva-grid'), q: $('#canva-q'), more: $('#canva-more'), back: '/media', onImport: () => location.reload() });
+        });
+    }
+    if (new URLSearchParams(location.search).get('canva') && $('[data-canva-open]')) {
+        // Returning from Canva sign-in: reopen the picker.
+        setTimeout(() => { $('[data-open-media]')?.click(); setTimeout(() => $('[data-canva-open]')?.click(), 300); }, 300);
+    }
+    if (new URLSearchParams(location.search).get('canva') && canvaPageBtn) {
+        setTimeout(() => canvaPageBtn.click(), 200);
+    }
+
+    /* ---------- Small helpers for other pages ---------- */
+    $$('[data-placeholder-target]').forEach((sel) => {
+        const target = $(sel.dataset.placeholderTarget);
+        const sync = () => { const o = sel.selectedOptions[0]; if (o && target) target.placeholder = o.dataset.placeholder || ''; };
+        sel.addEventListener('change', sync);
+        sync();
+    });
+
+    // Sparklines (competitors).
+    $$('[data-chart="spark"]').forEach((el) => {
+        const s = JSON.parse(el.dataset.series || '[]').map((p) => p.value);
+        if (s.length < 2) return;
+        const W = 110, H = 28, min = Math.min(...s), max = Math.max(...s), span = max - min || 1;
+        const pts = s.map((v, i) => `${(i / (s.length - 1) * W).toFixed(1)},${(H - 2 - (v - min) / span * (H - 4)).toFixed(1)}`).join(' ');
+        const up = s[s.length - 1] >= s[0];
+        el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="${up ? 'var(--ok)' : 'var(--danger)'}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+    });
+
+    // Inbox: grow reply boxes, Cmd/Ctrl+Enter to send.
+    $$('.inbox-reply textarea').forEach((t) => {
+        t.addEventListener('input', () => { t.style.height = 'auto'; t.style.height = Math.min(200, t.scrollHeight) + 'px'; });
+        t.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) t.form.requestSubmit(); });
+    });
+
+    // Link in bio: drag to reorder, pick an avatar.
+    const bioList = $('[data-bio-sortable]');
+    if (bioList) {
+        let dragging = null;
+        $$('.bio-link', bioList).forEach((item) => {
+            const grip = $('.grip', item);
+            if (!grip) return;
+            grip.addEventListener('mousedown', () => { item.draggable = true; });
+            item.addEventListener('dragstart', () => { dragging = item; item.classList.add('dragging'); });
+            item.addEventListener('dragend', async () => {
+                item.classList.remove('dragging');
+                item.draggable = false;
+                dragging = null;
+                try { await api('/bio/links/reorder', { method: 'POST', body: { order: $$('.bio-link', bioList).map((x) => x.dataset.id), _token: csrf() } }); toast('Order saved'); }
+                catch (err) { toast(err.message, 'error'); }
+            });
+        });
+        bioList.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            const over = e.target.closest('.bio-link');
+            if (!dragging || !over || over === dragging) return;
+            const r = over.getBoundingClientRect();
+            over.parentNode.insertBefore(dragging, e.clientY > r.top + r.height / 2 ? over.nextSibling : over);
+        });
+    }
+    const pickAvatar = $('[data-pick-avatar]');
+    if (pickAvatar) {
+        pickAvatar.addEventListener('click', async () => {
+            const dlg = $('#avatar-dialog');
+            const grid = $('#avatar-library');
+            dlg.showModal();
+            try {
+                const { media } = await api('/media');
+                const imgs = media.filter((m) => !m.is_video);
+                grid.innerHTML = imgs.length ? '' : '<p class="muted">Upload an image on the Media page first.</p>';
+                imgs.forEach((m) => {
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = 'media-pick';
+                    b.innerHTML = `<img src="${esc(m.url)}" alt="" loading="lazy">`;
+                    b.addEventListener('click', () => {
+                        $('[data-bio-avatar]').value = m.id;
+                        const holder = pickAvatar.parentElement.querySelector('.avatar');
+                        holder.querySelector('img')?.remove();
+                        holder.insertAdjacentHTML('beforeend', `<img src="${esc(m.url)}" alt="">`);
+                        dlg.close();
+                        toast('Picture chosen. Save the page to apply.');
+                    });
+                    grid.appendChild(b);
+                });
+            } catch (err) { grid.innerHTML = `<p class="error-text">${esc(err.message)}</p>`; }
+        });
+    }
 
     /* ---------- Composer ---------- */
     const form = $('[data-composer]');
@@ -512,6 +653,82 @@
         form.addEventListener('submit', () => { dirty = false; });
         window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
+
+        // Best-time chips: jump the date/time inputs to the next occurrence of that weekday + hour.
+        $$('[data-best-day]', form).forEach((chip) => chip.addEventListener('click', () => {
+            const day = Number(chip.dataset.bestDay), hour = Number(chip.dataset.bestHour);
+            const d = new Date();
+            d.setMinutes(0, 0, 0);
+            let add = (day - d.getDay() + 7) % 7;
+            if (add === 0 && d.getHours() >= hour) add = 7;
+            d.setDate(d.getDate() + add);
+            const pad = (n) => String(n).padStart(2, '0');
+            form.querySelector('[name="date"]').value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+            form.querySelector('[name="time"]').value = `${pad(hour)}:00`;
+            toast('Set to ' + chip.textContent.trim());
+        }));
+
+        // AI writing.
+        const aiDlg = $('#ai-dialog');
+        if (aiDlg) {
+            const results = $('#ai-results');
+            const setText = (t, mode) => {
+                if (mode === 'insert') {
+                    content.value = content.value.trim() ? content.value.replace(/\s*$/, '') + (t.startsWith('#') ? ' ' : '\n\n') + t : t;
+                } else {
+                    content.value = t;
+                }
+                content.dispatchEvent(new Event('input', { bubbles: true }));
+                aiDlg.close();
+            };
+            $$('[data-ai-action]', aiDlg).forEach((b) => b.addEventListener('click', async () => {
+                const action = b.dataset.aiAction;
+                $$('[data-ai-action]', aiDlg).forEach((x) => { x.disabled = true; });
+                results.innerHTML = '<p class="muted">Writing…</p>';
+                try {
+                    const r = await api('/ai/assist', { method: 'POST', body: {
+                        action, text: content.value, idea: $('#ai-idea').value,
+                        accounts: $$('input[name="accounts[]"]:checked', form).map((i) => Number(i.value)), _token: csrf(),
+                    } });
+                    results.innerHTML = r.variants.map((v, i) => `<div class="ai-result"><div class="ai-text">${esc(v)}</div>
+                        <div class="ai-result-actions"><span class="muted small">${Array.from(v).length} chars</span><span class="grow"></span>
+                        <button type="button" class="btn btn-sm" data-ai-insert="${i}">Add to post</button>
+                        <button type="button" class="btn btn-sm btn-primary" data-ai-use="${i}">${action === 'hashtags' ? 'Add hashtags' : 'Use this'}</button></div></div>`).join('');
+                    $$('[data-ai-use]', results).forEach((u) => u.addEventListener('click', () => setText(r.variants[u.dataset.aiUse], action === 'hashtags' ? 'insert' : 'replace')));
+                    $$('[data-ai-insert]', results).forEach((u) => u.addEventListener('click', () => setText(r.variants[u.dataset.aiInsert], 'insert')));
+                } catch (err) {
+                    results.innerHTML = `<p class="error-text">${esc(err.message)}</p>`;
+                }
+                $$('[data-ai-action]', aiDlg).forEach((x) => { x.disabled = false; });
+            }));
+        }
+
+        // Canva inside the media dialog.
+        const canvaOpen = $('[data-canva-open]');
+        if (canvaOpen) {
+            const panel = $('#canva-panel');
+            let browser = null;
+            canvaOpen.addEventListener('click', () => {
+                panel.hidden = false;
+                $('#media-library').hidden = true;
+                canvaOpen.parentElement.hidden = true;
+                browser ??= canvaBrowser({
+                    grid: $('#canva-grid'), q: $('#canva-q'), more: $('#canva-more'),
+                    back: location.pathname,
+                    onImport: (items) => {
+                        items.forEach((m) => { library.unshift(m); picked.push(m.id); });
+                        $('[data-canva-close]').click();
+                        renderLibrary();
+                        toast(items.length > 1 ? `Imported ${items.length} pages` : 'Imported from Canva');
+                    },
+                });
+            });
+            $('[data-canva-close]').addEventListener('click', () => {
+                panel.hidden = true;
+                $('#media-library').hidden = false;
+                canvaOpen.parentElement.hidden = false;
+            });
+        }
         renderMedia();
     }
 })();
