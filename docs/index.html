@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KreateMix: self-hosted social media scheduling in one PHP file</title>
+<meta name="description" content="Schedule posts, read analytics and answer comments across X, Instagram, Facebook, LinkedIn, TikTok, YouTube, Bluesky and more. Self-hosted, open source (AGPL), one PHP file.">
+<meta name="theme-color" content="#4f46e5">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="favicon.svg" alt="">KreateMix</a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#cost">Cost</a>
+      <a href="self-host.html">Self-host guide</a>
+      <a href="https://github.com/kennethyork/KreateMix">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero wrap">
+    <span class="pill">Open source · AGPL · One file</span>
+    <h1>Your own social media scheduler,<br>on a $2 server.</h1>
+    <p class="lead">KreateMix schedules posts, tracks analytics and answers comments across 11 networks. It's a single <code>index.php</code>, so you can run it yourself and keep your data and your accounts' tokens on your own server.</p>
+    <div class="actions">
+      <a class="btn primary" href="self-host.html">Set it up in 30 minutes</a>
+      <a class="btn" href="https://github.com/kennethyork/KreateMix/raw/main/index.php">Download index.php</a>
+    </div>
+  </div>
+
+  <section id="features" class="alt">
+    <div class="wrap">
+      <h2>Everything a social team needs</h2>
+      <p class="sub">X, Mastodon, Bluesky, Facebook Pages, Instagram, LinkedIn, YouTube, Threads, TikTok, Pinterest and Google Business Profile.</p>
+      <div class="grid">
+        <div class="card"><h3>Composer and calendar</h3><p>One post to many accounts with per-network text, live previews, stories, first comments, and a month and week calendar.</p></div>
+        <div class="card"><h3>Autolists and CSV import</h3><p>Evergreen queues that post on a schedule, and bulk scheduling from a spreadsheet.</p></div>
+        <div class="card"><h3>Analytics and reports</h3><p>Followers, engagement and top posts, a best-time-to-post heatmap, and white-label PDF and PowerPoint reports.</p></div>
+        <div class="card"><h3>Inbox</h3><p>Comments from seven networks in one place, with replies sent from KreateMix.</p></div>
+        <div class="card"><h3>Teams and approvals</h3><p>Workspaces per brand or client, with admin, member and viewer roles and optional approval before posting.</p></div>
+        <div class="card"><h3>AI writing</h3><p>Bring your own OpenRouter, OpenAI or Anthropic key, or a local Ollama server.</p></div>
+        <div class="card"><h3>API, MCP and webhooks</h3><p>A REST API, an MCP server for Claude and other AI clients, and signed webhooks.</p></div>
+        <div class="card"><h3>Installable app</h3><p>Install it on your phone, get push notifications, and draft posts offline.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="cost">
+    <div class="wrap">
+      <h2>What it costs to run</h2>
+      <p class="sub">KreateMix itself is free. You pay for a small server and a domain name.</p>
+      <div class="grid">
+        <div class="card">
+          <h3>Server (VPS)</h3>
+          <div class="price">$2<small>/month to start</small></div>
+          <p>A 2 GB VPS from IONOS is $2 a month for the first 3 months. For the lowest long-term price, RackNerd's 2 GB plan is about $3 a month, billed yearly. <a href="self-host.html#vps">Compare them</a>.</p>
+        </div>
+        <div class="card">
+          <h3>Domain name</h3>
+          <div class="price">~$10<small>/year</small></div>
+          <p>Needed for HTTPS and for connecting social accounts. A subdomain of one you already own works too, at no extra cost.</p>
+        </div>
+        <div class="card">
+          <h3>Control panel</h3>
+          <div class="price">$0</div>
+          <p>CloudPanel is free. It gives you a web dashboard for the site, PHP settings, free HTTPS certificates, cron jobs and backups, so you don't have to manage the server by hand.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="wrap">
+      <h2>How setup works</h2>
+      <p class="sub">The <a href="self-host.html">full guide</a> walks through every click and command.</p>
+      <ol class="steps">
+        <li>Rent a 2 GB VPS running Ubuntu 24.04 and point your domain at it.</li>
+        <li>Install CloudPanel with one command.</li>
+        <li>Create a PHP site in CloudPanel and turn on free HTTPS.</li>
+        <li>Download <code>index.php</code> into the site and open your domain to create your admin account.</li>
+        <li>Add one cron job so scheduled posts go out on time.</li>
+        <li>Add API keys for the networks you use. Mastodon and Bluesky need none.</li>
+      </ol>
+      <p><a class="btn primary" href="self-host.html">Start the guide</a></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Open source</h2>
+      <p>KreateMix is licensed under the GNU AGPL v3. You can read, change and run the code. If you run a modified copy for other people over a network, the AGPL asks you to share your changes with them. <a href="https://github.com/kennethyork/KreateMix">Source code on GitHub</a>.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 Kenneth York · AGPL-3.0-or-later</span>
+    <span><a href="self-host.html">Self-host guide</a> · <a href="https://github.com/kennethyork/KreateMix">GitHub</a> · <a href="https://github.com/kennethyork/KreateMix/issues">Report a problem</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

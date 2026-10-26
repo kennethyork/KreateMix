@@ -73,6 +73,8 @@ On first run KreateMix writes, and never anything else:
 
 ### CloudPanel
 
+New to servers? The [self-hosting guide](https://kennethyork.github.io/KreateMix/self-host.html) walks through the whole setup on a 2 GB VPS from about $2 a month: installing CloudPanel, HTTPS, cron, backups and updates. The short version:
+
 Create a PHP site, upload `index.php` to `htdocs/your-domain`, and open the domain. No root directory change is needed. The database usually lands in `htdocs/`, outside the web root. Add the cron job under the site's **Cron Jobs** tab: `php /home/<site-user>/htdocs/<your-domain>/index.php cron` every minute. Raise **Upload max filesize** and **Post max size** in the site's PHP settings if you post videos.
 
 ### Nginx
