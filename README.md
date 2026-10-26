@@ -1,6 +1,8 @@
-# MixCreate
+# KreateMix
 
-Self-hosted social media scheduling and analytics in **one file**: `index.php`. Plain PHP, HTML, CSS and JavaScript, with no framework, Composer, npm or build step, and no folders to set up. Inspired by Mixpost; all code here is original.
+Self-hosted social media scheduling and analytics in **one file**: `index.php`. Plain PHP, HTML, CSS and JavaScript, with no framework, Composer, npm or build step, and no folders to set up. Inspired by Mixpost; all code here is original. (Formerly MixCreate.)
+
+Don't want to run a server? **KreateMix Cloud** is the hosted version, with a 7-day free trial.
 
 ## Features
 
@@ -19,7 +21,7 @@ Self-hosted social media scheduling and analytics in **one file**: `index.php`. 
 - **Website analytics** — a cookieless tracking snippet: visitors, pages, referrers, UTM campaigns, devices, and how much traffic comes from social
 - **Hashtag tracker** — follow a hashtag on Mastodon, Bluesky, X and Instagram: posts, reach, top posts and the people using it
 - **Competitors** — track public accounts on X, Bluesky, Mastodon, Instagram and YouTube: followers, growth, posting frequency, average engagement
-- **Inbox** — comments on your posts from X, Mastodon, Bluesky, Facebook, Instagram, Threads and YouTube, with replies sent from MixCreate
+- **Inbox** — comments on your posts from X, Mastodon, Bluesky, Facebook, Instagram, Threads and YouTube, with replies sent from KreateMix
 - **Link in bio** — a public page per workspace with links, social icons, a recent-posts grid and click tracking
 - **Ads** — spend, impressions, clicks, CTR, CPC and conversions from Meta, Google and TikTok ad accounts
 - **AI writing** — write, rewrite, shorten, add hashtags or get variations. Bring your own [OpenRouter](https://openrouter.ai) key to use any major model; each workspace can use its own key. OpenAI, Anthropic and OpenAI-compatible servers (Ollama, LM Studio) work too
@@ -59,12 +61,12 @@ To update, replace `index.php` with the new one. The database is upgraded automa
 
 ### What it creates
 
-On first run MixCreate writes, and never anything else:
+On first run KreateMix writes, and never anything else:
 
 | File | What it is |
 |---|---|
-| `.ht.mixcreate-config.php` (next to `index.php`) | Settings and the secret key that encrypts your tokens. A PHP file, so it shows nothing if requested in a browser. |
-| `.ht.mixcreate-<random>.sqlite` | The database: posts, accounts, analytics, and your uploaded images and videos. It goes **one folder above** `index.php` when that folder is writable, where the web server can't reach it; otherwise next to `index.php` with an unguessable name. `db_path` in the settings file says where. |
+| `.ht.kreatemix-config.php` (next to `index.php`) | Settings and the secret key that encrypts your tokens. A PHP file, so it shows nothing if requested in a browser. |
+| `.ht.kreatemix-<random>.sqlite` | The database: posts, accounts, analytics, and your uploaded images and videos. It goes **one folder above** `index.php` when that folder is writable, where the web server can't reach it; otherwise next to `index.php` with an unguessable name. `db_path` in the settings file says where. |
 | `.htaccess` (Apache only) | Rewrite rules for clean URLs. |
 
 **Back up** the settings file and the database file together: the key in one decrypts the tokens in the other.
@@ -78,7 +80,7 @@ Create a PHP site, upload `index.php` to `htdocs/your-domain`, and open the doma
 Send every request that isn't a file to `index.php`:
 
 ```nginx
-root /var/www/mixcreate;
+root /var/www/kreatemix;
 index index.php;
 client_max_body_size 200M;
 
@@ -98,7 +100,7 @@ CSS, JavaScript, icons and uploaded media are served through `index.php?asset=�
 
 ### Without URL rewriting
 
-If your server can't rewrite URLs, MixCreate notices on the first visit and addresses pages as `https://your-site/index.php/...` instead. Nothing to configure. If you turn rewriting on later, set `app_url` to your site's address to switch back to clean URLs.
+If your server can't rewrite URLs, KreateMix notices on the first visit and addresses pages as `https://your-site/index.php/...` instead. Nothing to configure. If you turn rewriting on later, set `app_url` to your site's address to switch back to clean URLs.
 
 ### Local development
 
@@ -110,7 +112,7 @@ Set `'debug' => true` in the settings file to see errors and enable the **Sandbo
 
 ## Configuration
 
-`.ht.mixcreate-config.php` (created on first run, never commit it):
+`.ht.kreatemix-config.php` (created on first run, never commit it):
 
 | Key | Purpose |
 |---|---|
@@ -146,7 +148,7 @@ Facebook, Instagram, Threads, TikTok photos and Google Business fetch media from
 - **Ads**: Google Ads needs a developer token; Meta needs the `ads_read` permission; TikTok needs a TikTok for Business developer app.
 - **Google Drive** uses a Google OAuth client (it can be the same one as YouTube) with the Drive API enabled. Register the redirect URL shown under Integrations. Access is read-only.
 - **Hashtags**: Mastodon and Bluesky need nothing; X needs a connected X account on an API plan that includes recent search; Instagram needs a connected Instagram business account (Instagram limits you to 30 hashtags a week). The tracker refreshes every 30 minutes.
-- **Push notifications** need HTTPS. On iPhone, add MixCreate to the Home Screen first and turn notifications on from the app. Each person picks which events they get under **Profile**.
+- **Push notifications** need HTTPS. On iPhone, add KreateMix to the Home Screen first and turn notifications on from the app. Each person picks which events they get under **Profile**.
 
 ## AI (OpenRouter, bring your own key)
 
@@ -170,13 +172,19 @@ No cookies are set and no IP addresses are stored; visitors are counted with a s
 
 Download the sample from **Import**. Columns: `date`, `time`, `text`, `accounts`, `media`, `first_comment`, `tags`, `status`. Only `text` is required. `accounts` takes account names, `@handles` or network names separated by `;` or `|` (or `all`); `media` takes media library IDs or image URLs; `status` is `schedule` or `draft`. The file can use commas or semicolons as separators.
 
+## Legal pages
+
+Meta, TikTok, Google, LinkedIn and X ask for a terms of service, privacy policy and data deletion link when you submit your developer apps for review. KreateMix serves them at `/terms`, `/privacy` and `/data-deletion`. Edit them under **Legal pages** (instance admins); the starting text fills in your name and contact email, but review it, as it isn't legal advice.
+
+Under the same page you'll find Meta's **data deletion callback URL** (`/meta/data-deletion`). When someone removes your app in their Facebook settings, their connected Facebook, Instagram and Threads accounts are deleted and Meta gets a confirmation link.
+
 ## REST API
 
 Create a token under **API & webhooks**. Tokens act as you, in that workspace, with your role.
 
 ```
 curl -X POST https://your-site/api/v1/posts \
-  -H "Authorization: Bearer mc_..." \
+  -H "Authorization: Bearer km_..." \
   -H "Content-Type: application/json" \
   -d '{"content":"Hello","accounts":[1,2],"action":"schedule","scheduled_at":"2026-11-03T09:00:00-05:00"}'
 ```
@@ -202,10 +210,10 @@ Download the connector script from **API & webhooks**, paste it into a new [Apps
 
 ## MCP server
 
-MixCreate is an MCP server at `https://your-site/mcp` (Streamable HTTP). Authenticate with an API token as `Authorization: Bearer mc_...`. Tools: `list_accounts`, `list_posts`, `get_post`, `create_post`, `get_analytics`, `list_inbox`, `reply_to_comment`. For Claude Code:
+KreateMix is an MCP server at `https://your-site/mcp` (Streamable HTTP). Authenticate with an API token as `Authorization: Bearer km_...`. Tools: `list_accounts`, `list_posts`, `get_post`, `create_post`, `get_analytics`, `list_inbox`, `reply_to_comment`. For Claude Code:
 
 ```
-claude mcp add --transport http mixcreate https://your-site/mcp --header "Authorization: Bearer mc_..."
+claude mcp add --transport http kreatemix https://your-site/mcp --header "Authorization: Bearer km_..."
 ```
 
 Posts created through MCP follow the same approval rules as the token's owner.
@@ -218,12 +226,18 @@ Each delivery is a `POST` with a JSON body:
 { "event": "post.published", "workspace_id": 1, "sent_at": "2026-10-26T14:00:00+00:00", "data": { "post": { ... } } }
 ```
 
-Verify `X-MixCreate-Signature`, which is `sha256=` followed by the HMAC-SHA256 of the raw body using the webhook secret. Events: `post.created`, `post.updated`, `post.scheduled`, `post.approval_requested`, `post.approved`, `post.rejected`, `post.published`, `post.failed`, `post.deleted`, `account.connected`, `account.disconnected`.
+Verify `X-KreateMix-Signature` (also sent as `X-MixCreate-Signature` for receivers set up before the rename), which is `sha256=` followed by the HMAC-SHA256 of the raw body using the webhook secret. Events: `post.created`, `post.updated`, `post.scheduled`, `post.approval_requested`, `post.approved`, `post.rejected`, `post.published`, `post.failed`, `post.deleted`, `account.connected`, `account.disconnected`.
 
 ## Extending
 
 Optional: put a `module.php` in `modules/<name>/` next to `index.php`. It's loaded on every request and can register routes, platforms, sidebar items and event listeners through `App\Hooks` (see the `Hooks` class in `index.php`). Nothing is needed if you don't use modules.
 
+## Upgrading from MixCreate
+
+Replace `index.php`. On the first request, `.ht.mixcreate-config.php` is renamed to `.ht.kreatemix-config.php` and keeps pointing at your existing database. Everyone signs in once more (the session cookie was renamed). Existing API tokens (`mc_…`) keep working; new ones start with `km_`.
+
 ## License
 
-MIT
+GNU Affero General Public License v3.0 or later (see `LICENSE`). Copyright (C) 2026 Kenneth York. Versions released before the license change remain available under MIT.
+
+If you run a modified copy for other people over a network, the AGPL asks you to offer them its source code. The **Source code** link in the app's menu points to this repository; change it if you publish your changes elsewhere.
