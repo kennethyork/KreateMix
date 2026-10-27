@@ -430,7 +430,7 @@ function account_avatar(array $a, string $size = ''): string
 /** Small colored platform marker with a short abbreviation (no brand logos). */
 function provider_badge(string $key, string $class = 'pbadge'): string
 {
-    $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'peertube' => 'PT', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in',
+    $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'peertube' => 'PT', 'loops' => 'L', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in',
         'youtube' => 'YT', 'threads' => 'Th', 'tiktok' => 'TT', 'pinterest' => 'P', 'google_business' => 'G', 'sandbox' => 'S'];
     $meta = provider_meta($key);
     return '<span class="' . e($class) . '" style="--pc: ' . e($meta['color']) . '" aria-hidden="true">' . e($abbr[$key] ?? strtoupper(substr($key, 0, 1))) . '</span>';
@@ -4126,6 +4126,7 @@ final class BioController
             'mastodon' => str_contains($u, '@') ? 'https://' . explode('@', $u)[1] . '/@' . explode('@', $u)[0] : null,
             'pixelfed' => str_contains($u, '@') ? 'https://' . explode('@', $u)[1] . '/' . explode('@', $u)[0] : null,
             'peertube' => str_contains($u, '@') ? 'https://' . explode('@', $u)[1] . '/c/' . explode('@', $u)[0] : null,
+            'loops' => str_contains($u, '@') ? 'https://' . explode('@', $u)[1] . '/@' . explode('@', $u)[0] : null,
             'instagram' => $u ? "https://www.instagram.com/$u/" : null,
             'threads' => $u ? "https://www.threads.net/@$u" : null,
             'tiktok' => $u ? "https://www.tiktok.com/@$u" : null,
@@ -10436,7 +10437,7 @@ class Mastodon extends OAuth2Provider
     }
 
     /** Gets or registers this install's app on the given server. */
-    private function appFor(string $server, string $redirectUri): array
+    protected function appFor(string $server, string $redirectUri): array
     {
         $key = static::key() . '@' . $server;
         $row = Db::one('SELECT credentials FROM services WHERE provider = ?', [$key]);
@@ -10846,6 +10847,189 @@ final class PeerTube extends OAuth2Provider
 
 namespace App\Providers {
 
+// ---- Providers/Loops.php ----
+use App\Http;
+use App\MediaTools;
+
+/**
+ * Loops: short vertical videos on the fediverse (loops.video and other servers). Registers an app on
+ * each server like Mastodon, then signs in with OAuth. One MP4 per post; the post text is the caption.
+ */
+final class Loops extends Mastodon
+{
+    public const DEFAULT_SERVER = 'loops.video';
+
+    public static function key(): string { return 'loops'; }
+    public static function name(): string { return 'Loops'; }
+    public static function color(): string { return '#f43f5e'; }
+    public static function textLimit(): int { return 200; }
+
+    public static function mediaRules(): array
+    {
+        return ['max_media' => 1, 'video' => true, 'requires_media' => true, 'requires_video' => true];
+    }
+
+    public static function connectFields(): array
+    {
+        return ['server' => ['label' => 'Server (leave empty for loops.video)', 'type' => 'text', 'placeholder' => self::DEFAULT_SERVER]];
+    }
+
+    public static function setupHint(): string
+    {
+        return 'No keys needed. Sign in with your Loops account (loops.video, or another Loops server). Each post is one MP4 video with a caption of up to 200 characters; the server sets the largest file size (40 MB on most).';
+    }
+
+    protected function scopes(): array { return ['user:read', 'video:create', 'video:read']; }
+
+    // The server's app keys travel with the token, so it can be renewed later.
+    protected function clientId(): string { return (string) ($this->token()['client_id'] ?? $this->credentials['client_id'] ?? ''); }
+    protected function clientSecret(): string { return (string) ($this->token()['client_secret'] ?? $this->credentials['client_secret'] ?? ''); }
+
+    public function authUrl(string $redirectUri, string $state, array $form = []): string
+    {
+        if (trim((string) ($form['server'] ?? '')) === '') {
+            $form['server'] = self::DEFAULT_SERVER;
+        }
+        return parent::authUrl($redirectUri, $state, $form);
+    }
+
+    public function connect(array $input, string $redirectUri): array
+    {
+        $this->server = (string) ($this->stash['server'] ?? self::DEFAULT_SERVER);
+        $app = $this->appFor($this->server, $redirectUri);
+        $this->credentials = $app;
+        $token = $this->exchangeCode($input, $redirectUri) + ['client_id' => $app['client_id'], 'client_secret' => $app['client_secret']];
+        $this->account = ['token' => $token];
+        $me = $this->me();
+        if (empty($me['id'])) {
+            throw new ProviderException('Loops didn’t return your account. Try again.');
+        }
+        return [[
+            'provider_id' => $this->server . ':' . $me['id'],
+            'name' => ($me['name'] ?? '') !== '' ? $me['name'] : $me['username'],
+            'username' => $me['username'] . '@' . $this->server,
+            'avatar' => $me['avatar'] ?? null,
+            'token' => $token,
+            'data' => ['server' => $this->server, 'account_id' => (string) $me['id']],
+        ]];
+    }
+
+    private function me(): array
+    {
+        $j = $this->api('GET', $this->base() . '/api/v1/account/info/self')['json'];
+        return $j['data'] ?? $j;
+    }
+
+    /** Loops' short video ids (the /v/… part of a link): the numeric id in base 64. */
+    public static function shortId(string $id): string
+    {
+        $alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_';
+        if (!ctype_digit($id)) {
+            return $id;
+        }
+        $n = (int) $id;
+        $out = '';
+        do {
+            $out = $alphabet[$n % 64] . $out;
+            $n = intdiv($n, 64);
+        } while ($n > 0);
+        return $out;
+    }
+
+    public function publish(string $text, array $media): array
+    {
+        $videos = array_values(array_filter($media, [MediaTools::class, 'isVideo']));
+        if (!$videos) {
+            throw new ProviderException('Loops posts need a video.');
+        }
+        $v = $videos[0];
+        if ($v['mime'] !== 'video/mp4') {
+            throw new ProviderException('Loops only accepts MP4 videos. Export the video as MP4 and attach it again.');
+        }
+        $this->api('POST', $this->base() . '/api/v1/studio/upload', [
+            'multipart' => [
+                'video' => new \CURLFile($v['path'], $v['mime'], $v['name']),
+                'description' => mb_substr(trim($text), 0, 200),
+                'comment_state' => '4', // comments on
+            ],
+            'timeout' => 900,
+        ]);
+        // The upload doesn't return the video, so look up the newest one (it may still be processing).
+        $id = '';
+        try {
+            $list = $this->api('GET', $this->base() . '/api/v1/studio/posts', ['query' => ['limit' => 1, 'sort_direction' => 'desc']])['json'];
+            $id = (string) ($list['data'][0]['id'] ?? '');
+        } catch (ProviderException) {
+            // Published anyway; the link falls back to the profile.
+        }
+        return [
+            'id' => $id !== '' ? $id : 'upload-' . time(),
+            'url' => $id !== '' ? $this->base() . '/v/' . self::shortId($id) : $this->base() . '/@' . explode('@', (string) ($this->account['username'] ?? ''))[0],
+        ];
+    }
+
+    public function accountMetrics(): array
+    {
+        $me = $this->me();
+        return isset($me['follower_count']) ? ['followers' => (int) $me['follower_count'], 'following' => (int) ($me['following_count'] ?? 0)] : [];
+    }
+
+    public function postMetrics(string $providerPostId): array
+    {
+        if (!ctype_digit($providerPostId)) {
+            return [];
+        }
+        $j = $this->api('GET', $this->base() . '/api/v1/video/' . $providerPostId)['json'];
+        $v = $j['data'] ?? $j;
+        return ['likes' => (int) ($v['likes'] ?? 0), 'replies' => (int) ($v['comments'] ?? 0), 'shares' => (int) ($v['shares'] ?? 0)];
+    }
+
+    public static function supportsComments(): bool { return true; }
+
+    public function comments(string $providerPostId): array
+    {
+        if (!ctype_digit($providerPostId)) {
+            return [];
+        }
+        $j = $this->api('GET', $this->base() . '/api/v1/video/comments/' . $providerPostId)['json'];
+        $server = (string) ($this->accountData()['server'] ?? self::DEFAULT_SERVER);
+        $out = [];
+        foreach ($j['data'] ?? [] as $c) {
+            if (!empty($c['tombstone']) || !isset($c['id'])) {
+                continue;
+            }
+            $a = $c['account'] ?? [];
+            $out[] = [
+                'id' => (string) $c['id'],
+                'text' => trim(html_entity_decode(strip_tags((string) ($c['caption'] ?? '')), ENT_QUOTES | ENT_HTML5, 'UTF-8')),
+                'author_name' => ($a['name'] ?? '') ?: ($a['username'] ?? ''),
+                'author_handle' => str_contains((string) ($a['username'] ?? ''), '@') ? $a['username'] : ($a['username'] ?? '') . '@' . $server,
+                'author_avatar' => $a['avatar'] ?? null,
+                'created_at' => gmdate('Y-m-d H:i:s', strtotime($c['created_at'] ?? 'now')),
+                'url' => $c['url'] ?? null,
+                'reply_ref' => '',
+                'own' => !empty($c['is_owner']),
+            ];
+        }
+        usort($out, fn($a, $b) => strcmp($a['created_at'], $b['created_at']));
+        return $out;
+    }
+
+    public function reply(array $item, string $text): array
+    {
+        $res = $this->api('POST', $this->base() . '/api/v1/video/comments/' . rawurlencode((string) $item['root_ref']), ['json' => ['comment' => $text, 'parent_id' => (int) $item['provider_item_id']]]);
+        $c = $res['json']['data'][0] ?? [];
+        return ['id' => (string) ($c['id'] ?? ''), 'url' => $c['url'] ?? null];
+    }
+
+    // The video is still processing right after upload, and Loops only takes comments on published videos.
+    public static function supportsFirstComment(): bool { return false; }
+}
+
+}
+
+namespace App\Providers {
+
 // ---- Providers/Pinterest.php ----
 use App\MediaTools;
 
@@ -10971,6 +11155,7 @@ final class Registry
         Mastodon::class,
         Pixelfed::class,
         PeerTube::class,
+        Loops::class,
         Bluesky::class,
         Facebook::class,
         Instagram::class,
@@ -15102,7 +15287,7 @@ $radius = ($theme['button'] ?? 'rounded') === 'square' ? '8px' : '999px';
     <?php if ($page['bio'] !== ''): ?><p class="bio"><?= e($page['bio']) ?></p><?php endif; ?>
     <?php if ($socials): ?>
         <nav class="socials" aria-label="Social profiles">
-            <?php foreach ($socials as $href => $a): $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'peertube' => 'PT', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in', 'youtube' => 'YT', 'threads' => '@', 'tiktok' => 'TT', 'pinterest' => 'P'][$a['provider']] ?? '•'; ?>
+            <?php foreach ($socials as $href => $a): $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'peertube' => 'PT', 'loops' => 'L', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in', 'youtube' => 'YT', 'threads' => '@', 'tiktok' => 'TT', 'pinterest' => 'P'][$a['provider']] ?? '•'; ?>
                 <a href="<?= e($href) ?>" target="_blank" rel="noopener me" title="<?= e(provider_meta($a['provider'])['name']) ?>" aria-label="<?= e(provider_meta($a['provider'])['name']) ?>"><?= e($abbr) ?></a>
             <?php endforeach; ?>
         </nav>
@@ -20064,7 +20249,7 @@ MC_ASSET_1],
             return String(name || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
         }
         function abbr(key) {
-            return { x: 'X', mastodon: 'M', pixelfed: 'Px', bluesky: 'B', facebook: 'f', instagram: 'IG', linkedin: 'in', youtube: 'YT', threads: 'Th', tiktok: 'TT', pinterest: 'P', google_business: 'G', sandbox: 'S' }[key] || key[0].toUpperCase();
+            return { x: 'X', mastodon: 'M', pixelfed: 'Px', peertube: 'PT', loops: 'L', bluesky: 'B', facebook: 'f', instagram: 'IG', linkedin: 'in', youtube: 'YT', threads: 'Th', tiktok: 'TT', pinterest: 'P', google_business: 'G', sandbox: 'S' }[key] || key[0].toUpperCase();
         }
 
         form.addEventListener('input', update);

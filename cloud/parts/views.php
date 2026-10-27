@@ -335,7 +335,7 @@ function mc_view_cloud_landing(array $__vars): void
 ?><?php
 $trial = (int) $cloud['trial_days'];
 $signup = !empty($cloud['signup_open']);
-$networks = ['Instagram', 'Facebook', 'X', 'LinkedIn', 'TikTok', 'YouTube', 'Threads', 'Pinterest', 'Bluesky', 'Mastodon', 'Pixelfed', 'PeerTube', 'Google Business'];
+$networks = ['Instagram', 'Facebook', 'X', 'LinkedIn', 'TikTok', 'YouTube', 'Threads', 'Pinterest', 'Bluesky', 'Mastodon', 'Pixelfed', 'PeerTube', 'Loops', 'Google Business'];
 $features = [
     ['calendar', 'Plan and schedule', 'One post to every network with per-network text, a drag-and-drop calendar, autolists that recycle your best posts, and bulk upload from a spreadsheet.'],
     ['chart', 'Analytics that explain', 'Followers, reach and engagement for every account, your best times to post, and which formats and hashtags work.'],
@@ -568,7 +568,7 @@ function mc_view_cloud_thanks(array $__vars): void
                 </div>
                 <fieldset class="field"><legend>Networks you want</legend>
                     <div class="check-grid">
-                        <?php foreach (['facebook' => 'Facebook', 'instagram' => 'Instagram', 'linkedin' => 'LinkedIn', 'x' => 'X', 'tiktok' => 'TikTok', 'youtube' => 'YouTube', 'threads' => 'Threads', 'pinterest' => 'Pinterest', 'google_business' => 'Google Business', 'bluesky' => 'Bluesky', 'mastodon' => 'Mastodon'] as $k => $l): ?>
+                        <?php foreach (['facebook' => 'Facebook', 'instagram' => 'Instagram', 'linkedin' => 'LinkedIn', 'x' => 'X', 'tiktok' => 'TikTok', 'youtube' => 'YouTube', 'threads' => 'Threads', 'pinterest' => 'Pinterest', 'google_business' => 'Google Business', 'bluesky' => 'Bluesky', 'mastodon' => 'Mastodon', 'pixelfed' => 'Pixelfed', 'peertube' => 'PeerTube', 'loops' => 'Loops'] as $k => $l): ?>
                             <label class="check"><input type="checkbox" name="platforms[]" value="<?= e($k) ?>" <?= in_array($k, $d['platforms'] ?? [], true) ? 'checked' : '' ?>> <span><?= e($l) ?></span></label>
                         <?php endforeach; ?>
                     </div>

@@ -21,7 +21,7 @@ Don't want to run a server? **KreateMix Cloud** is the hosted version, with a 7-
 - **Website analytics** — a cookieless tracking snippet: visitors, pages, referrers, UTM campaigns, devices, and how much traffic comes from social
 - **Hashtag tracker** — follow a hashtag on Mastodon, Bluesky, X and Instagram: posts, reach, top posts and the people using it
 - **Competitors** — track public accounts on X, Bluesky, Mastodon, Instagram and YouTube: followers, growth, posting frequency, average engagement
-- **Inbox** — comments on your posts from X, Mastodon, Pixelfed, PeerTube, Bluesky, Facebook, Instagram, Threads and YouTube, with replies sent from KreateMix
+- **Inbox** — comments on your posts from X, Mastodon, Pixelfed, PeerTube, Loops, Bluesky, Facebook, Instagram, Threads and YouTube, with replies sent from KreateMix
 - **Link in bio** — a public page per workspace with links, social icons, a recent-posts grid and click tracking
 - **Ads** — spend, impressions, clicks, CTR, CPC and conversions from Meta, Google and TikTok ad accounts
 - **AI writing** — write, rewrite, shorten, add hashtags or get variations. Bring your own [OpenRouter](https://openrouter.ai) key to use any major model; each workspace can use its own key. OpenAI, Anthropic and OpenAI-compatible servers (Ollama, LM Studio) work too
@@ -32,7 +32,7 @@ Don't want to run a server? **KreateMix Cloud** is the hosted version, with a 7-
 - **Installable app (PWA)** — install it on your phone or computer from the **Install** button in the menu (iPhone gets step-by-step instructions). Runs in its own window, shows unread comments on the app icon, has shortcuts to New post, Calendar and Inbox, and appears in your phone's share menu so you can share a link or text straight into a new post
 - **Push notifications** — failed posts, approvals, new comments
 - **Webhooks** — signed with HMAC-SHA256, retried with backoff
-- **Platforms** — X, Mastodon, Pixelfed, PeerTube, Bluesky, Facebook Pages, Instagram, LinkedIn, YouTube, Threads, TikTok, Pinterest, Google Business Profile
+- **Platforms** — X, Mastodon, Pixelfed, PeerTube, Loops, Bluesky, Facebook Pages, Instagram, LinkedIn, YouTube, Threads, TikTok, Pinterest, Google Business Profile
 - **Works offline** — drafts autosave on your device, pages you've opened still load without a connection, and posts made offline send themselves when you're back
 - **Media cached on your device** — images and videos you've viewed are kept in the browser (IndexedDB, up to 200 MB, files up to 25 MB) so they load instantly and show offline. The server keeps the real copy, so scheduled posts still go out with the browser closed. Signing out clears the cache
 - Dark mode, mobile layout, encrypted tokens at rest
@@ -50,7 +50,7 @@ Don't want to run a server? **KreateMix Cloud** is the hosted version, with a 7-
 3. That's it for the scheduler: KreateMix adds its own cron job when you create the admin account, if your host allows it. Check **Integrations → Scheduler**; see [Scheduler](#scheduler) for the other options.
 
 4. Optional: under **Integrations**, add a mail server (for emailed reports), an OpenRouter key for AI, Canva, Google Drive and ads platform keys.
-5. As the admin, open **Platform API keys** and add keys for the platforms you want. Each one shows the callback URL to register with the platform. Mastodon, Pixelfed, PeerTube and Bluesky need no keys.
+5. As the admin, open **Platform API keys** and add keys for the platforms you want. Each one shows the callback URL to register with the platform. Mastodon, Pixelfed, PeerTube, Loops and Bluesky need no keys.
 
 To update, replace `index.php` with the new one. The database is upgraded automatically.
 
@@ -147,6 +147,7 @@ Integrations → Scheduler shows when it last ran and how.
 | Mastodon | none | Registers itself on each server automatically. |
 | Pixelfed | none | Same as Mastodon. Every post needs a photo or video (up to 4). |
 | PeerTube | none | Long-form video on any public PeerTube server; no video server of your own needed. Sign in with username and password (only a token is kept). Each channel is its own account. First line is the title. |
+| Loops | none | Short vertical videos on loops.video or another Loops server. Signs in with OAuth like Mastodon. One MP4 per post, caption up to 200 characters; the server sets the size limit (usually 40 MB). Comments come into the inbox. |
 | Bluesky | none | Connect with a handle and an app password. Video goes through Bluesky's video service. |
 | Facebook Pages | App ID/secret | Each Page is its own account. |
 | Instagram | Instagram app ID/secret | Professional accounts only. PNG/WebP are converted to JPEG automatically. Single videos post as Reels. |
