@@ -430,7 +430,7 @@ function media_url(array|string $m, bool $absolute = false): string
 /** The command to put in crontab. */
 function cron_command(): string
 {
-    return 'php ' . APP_FILE . ' cron';
+    return App\Scheduler::command();
 }
 
 /** The Authorization request header. Some Apache setups hide it from $_SERVER, so ask the server directly too. */
@@ -3460,7 +3460,12 @@ final class AuthController
         $wsId = Workspace::create($data['workspace'], $userId);
         Db::update('users', ['current_workspace_id' => $wsId], 'id = ?', [$userId]);
         Auth::login($userId);
+        // Set up the scheduler automatically when the server allows it.
+        [$cronOk] = \App\Scheduler::install();
         flash('success', 'You’re all set. Next, add your platform API keys and connect accounts.');
+        if (!$cronOk && !\App\Scheduler::webFallbackPossible()) {
+            flash('error', 'Add the scheduler so posts publish on time: see Integrations → Scheduler.');
+        }
         redirect('/accounts');
     }
 
@@ -4232,7 +4237,7 @@ final class CronController
             abort(403, 'Invalid cron key.');
         }
         ignore_user_abort(true);
-        json_response(Cron::tick());
+        json_response(Cron::tick('url'));
     }
 }
 
@@ -4265,6 +4270,9 @@ final class DashboardController
 
         // Is cron running? Warn admins if scheduled posts are overdue.
         $overdue = (int) Db::value("SELECT COUNT(*) FROM posts WHERE workspace_id = ? AND status = 'scheduled' AND scheduled_at < ?", [$wsId, gmdate('Y-m-d H:i:s', time() - 300)]);
+        if (\App\Auth::isAdmin()) {
+            \App\Scheduler::repair();
+        }
         $cronAge = kv_age('cron.ran');
 
         view('dashboard', [
@@ -4975,7 +4983,31 @@ final class IntegrationsController
         foreach (array_keys(self::GROUPS) as $g) {
             $values[$g] = Settings::get($g);
         }
+        \App\Scheduler::repair();
         view('admin/integrations', ['title' => 'Integrations', 'groups' => self::GROUPS, 'values' => $values, 'models' => \App\Ai::openRouterModels()]);
+    }
+
+    /** Scheduler controls: add or remove the cron job, or switch the page-view fallback. */
+    public function scheduler(string $action): void
+    {
+        $back = (string) input('back', '/admin/integrations');
+        $back = str_starts_with($back, '/') && !str_starts_with($back, '//') ? $back : '/admin/integrations';
+        if ($action === 'install') {
+            [$ok, $msg] = \App\Scheduler::install();
+            flash($ok ? 'success' : 'error', $msg);
+        } elseif ($action === 'remove') {
+            \App\Scheduler::uninstall();
+            flash('success', 'Removed the cron job.');
+        } elseif ($action === 'web') {
+            Settings::save('scheduler', ['web' => input('web') ? 1 : 0]);
+            flash('success', 'Saved.');
+        } elseif ($action === 'run') {
+            $r = \App\Cron::tick('url');
+            flash('success', isset($r['skipped']) ? 'The scheduler is already running.' : 'Ran the scheduler.');
+        } else {
+            abort(404);
+        }
+        redirect($back, [], '#scheduler');
     }
 
     public function save(string $group): void
@@ -6810,7 +6842,8 @@ namespace App {
 /** One scheduler tick: publish due posts, deliver webhooks, import analytics. */
 final class Cron
 {
-    public static function tick(): array
+    /** @param string $source cli (cron job), web (after a page view) or url (/cron?key=…) */
+    public static function tick(string $source = 'cli'): array
     {
         // A lock row in the database stops overlapping runs; a crashed run's lock expires after 30 minutes.
         $now = time();
@@ -6822,6 +6855,7 @@ final class Cron
             return ['skipped' => 'Another run is in progress.'];
         }
         kv_set('cron.ran', true);
+        kv_set('cron.source', $source);
         set_time_limit(0);
 
         // Each job is isolated so one failing integration can't stop publishing or the others.
@@ -12506,6 +12540,226 @@ final class Router
 
 namespace App {
 
+// ---- Scheduler.php ----
+/**
+ * Keeps the scheduler (Cron::tick) running without anyone editing crontab by hand:
+ *
+ * 1. On first setup, and from a button on Integrations, it adds itself to the web server user's crontab
+ *    when the host allows it (PHP can run the `crontab` command).
+ * 2. As a fallback, it runs after page views: once the response has been sent, if the scheduler hasn't
+ *    run for a minute, it runs then. That needs PHP-FPM or LiteSpeed (visitors never wait for it), and
+ *    only works while someone is using the site, so a real cron job is still best.
+ * 3. Failing both, any outside service can call /cron?key=… every minute.
+ */
+final class Scheduler
+{
+    public const MARK = '# KreateMix scheduler';
+
+    /** Seconds since the scheduler last ran, or null if never. */
+    public static function lastRun(): ?int
+    {
+        return kv_age('cron.ran');
+    }
+
+    /** How it last ran: cli (a cron job), web (after a page view) or url (an outside service). */
+    public static function lastSource(): ?string
+    {
+        $s = kv_get('cron.source');
+        return is_string($s) ? $s : null;
+    }
+
+    public static function healthy(): bool
+    {
+        $age = self::lastRun();
+        return $age !== null && $age < 300;
+    }
+
+    /** The PHP command-line binary (under PHP-FPM, PHP_BINARY is php-fpm itself, which can't run scripts). */
+    public static function phpCli(): string
+    {
+        $ver = PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION;
+        $candidates = [];
+        if (PHP_SAPI === 'cli' && PHP_BINARY !== '') {
+            $candidates[] = PHP_BINARY;
+        }
+        array_push($candidates, PHP_BINDIR . '/php' . $ver, PHP_BINDIR . '/php', '/usr/bin/php' . $ver, '/usr/local/bin/php', '/usr/bin/php', '/opt/cpanel/ea-php' . str_replace('.', '', $ver) . '/root/usr/bin/php');
+        foreach ($candidates as $c) {
+            if (@is_file($c) && @is_executable($c) && !str_contains(basename($c), 'fpm') && !str_contains(basename($c), 'cgi')) {
+                return $c;
+            }
+        }
+        return 'php';
+    }
+
+    public static function command(): string
+    {
+        return self::phpCli() . ' ' . escapeshellarg(APP_FILE) . ' cron';
+    }
+
+    public static function cronLine(): string
+    {
+        return '* * * * * ' . self::command() . ' >/dev/null 2>&1 ' . self::MARK;
+    }
+
+    public static function webCronUrl(): string
+    {
+        return abs_url('cron') . '?key=' . rawurlencode((string) Config::get('cron_key', ''));
+    }
+
+    private static function crontabBinary(): ?string
+    {
+        foreach (['/usr/bin/crontab', '/bin/crontab', '/usr/local/bin/crontab'] as $c) {
+            if (@is_file($c) && @is_executable($c)) {
+                return $c;
+            }
+        }
+        return null;
+    }
+
+    private static function canRun(): bool
+    {
+        if (!function_exists('proc_open')) {
+            return false;
+        }
+        $disabled = array_map('trim', explode(',', (string) ini_get('disable_functions')));
+        return !in_array('proc_open', $disabled, true);
+    }
+
+    public static function canInstall(): bool
+    {
+        return self::canRun() && self::crontabBinary() !== null;
+    }
+
+    /** Runs crontab with optional stdin; returns [exit code, stdout, stderr]. */
+    private static function crontab(array $args, ?string $stdin = null): array
+    {
+        $bin = self::crontabBinary();
+        $p = proc_open(array_merge([$bin], $args), [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, ['PATH' => '/usr/local/bin:/usr/bin:/bin']);
+        if (!is_resource($p)) {
+            return [1, '', 'Could not start crontab.'];
+        }
+        if ($stdin !== null) {
+            fwrite($pipes[0], $stdin);
+        }
+        fclose($pipes[0]);
+        $out = (string) stream_get_contents($pipes[1]);
+        $err = (string) stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        return [proc_close($p), $out, $err];
+    }
+
+    /** Whether this install's line is in the crontab. */
+    public static function installed(): bool
+    {
+        if (!self::canInstall()) {
+            return false;
+        }
+        [$code, $out] = self::crontab(['-l']);
+        return $code === 0 && str_contains($out, APP_FILE) && str_contains($out, ' cron');
+    }
+
+    /** Adds (or refreshes) the cron job. Returns [ok, message]. */
+    public static function install(): array
+    {
+        if (!self::canInstall()) {
+            return [false, 'This server doesn’t let the app edit its own cron jobs.'];
+        }
+        [$code, $current, $err] = self::crontab(['-l']);
+        if ($code !== 0 && !preg_match('/no crontab/i', $err)) {
+            return [false, 'Couldn’t read the cron jobs: ' . trim($err)];
+        }
+        $lines = $code === 0 ? preg_split('/\R/', rtrim($current)) : [];
+        // Drop an older line for this same copy (e.g. after the PHP version changed), keep everything else.
+        $lines = array_values(array_filter($lines, fn($l) => $l !== '' && !(str_contains($l, self::MARK) && str_contains($l, APP_FILE))));
+        $lines[] = self::cronLine();
+        [$code, , $err] = self::crontab(['-'], implode("\n", $lines) . "\n");
+        if ($code !== 0) {
+            return [false, 'Couldn’t save the cron job: ' . trim($err)];
+        }
+        if (!self::installed()) {
+            return [false, 'The cron job didn’t stick. Add it by hand.'];
+        }
+        kv_set('cron.installed', true);
+        log_event('info', 'Scheduler cron job added: ' . self::cronLine());
+        return [true, 'The scheduler runs every minute now.'];
+    }
+
+    public static function uninstall(): bool
+    {
+        if (!self::canInstall()) {
+            return false;
+        }
+        [$code, $current] = self::crontab(['-l']);
+        if ($code !== 0) {
+            return true;
+        }
+        $lines = array_filter(preg_split('/\R/', rtrim($current)), fn($l) => $l !== '' && !(str_contains($l, self::MARK) && str_contains($l, APP_FILE)));
+        [$code] = self::crontab(['-'], $lines ? implode("\n", $lines) . "\n" : '');
+        kv_delete('cron.installed');
+        return $code === 0;
+    }
+
+    public static function webFallbackEnabled(): bool
+    {
+        return (bool) (Settings::get('scheduler')['web'] ?? true);
+    }
+
+    /** Whether running after page views works on this server (the response must be sent first). */
+    public static function webFallbackPossible(): bool
+    {
+        return function_exists('fastcgi_finish_request') || function_exists('litespeed_finish_request');
+    }
+
+    /**
+     * Called on page views: when the scheduler is overdue, run it after the response is sent.
+     * Visitors never wait; the cron lock stops overlapping runs.
+     */
+    public static function onRequest(): void
+    {
+        static $done = false;
+        if ($done || PHP_SAPI === 'cli' || !self::webFallbackPossible() || !self::webFallbackEnabled()) {
+            return;
+        }
+        $done = true;
+        $age = self::lastRun();
+        if ($age !== null && $age < 60) {
+            return;
+        }
+        register_shutdown_function(static function () {
+            if (function_exists('fastcgi_finish_request')) {
+                fastcgi_finish_request();
+            } elseif (function_exists('litespeed_finish_request')) {
+                litespeed_finish_request();
+            }
+            ignore_user_abort(true);
+            // This request may have run it already (e.g. it was a /cron call).
+            $age = self::lastRun();
+            if ($age !== null && $age < 60) {
+                return;
+            }
+            try {
+                Cron::tick('web');
+            } catch (\Throwable $e) {
+                log_event('error', 'Scheduler (page view) failed: ' . $e->getMessage());
+            }
+        });
+    }
+
+    /** If the cron job went missing (e.g. a control panel rewrote the crontab), put it back. */
+    public static function repair(): void
+    {
+        $age = self::lastRun();
+        if (($age === null || $age > 300) && kv_get('cron.installed') && self::canInstall() && !self::installed() && kv_due('cron.repair', 3600)) {
+            self::install();
+        }
+    }
+}
+
+}
+
+namespace App {
+
 // ---- Settings.php ----
 /**
  * Instance-wide settings groups (SMTP, AI, Canva, ads platforms), stored encrypted
@@ -13167,6 +13421,7 @@ final class View
   'partials/analytics_filters' => 'mc_view_partials_analytics_filters',
   'partials/post_row' => 'mc_view_partials_post_row',
   'partials/pwa_head' => 'mc_view_partials_pwa_head',
+  'partials/scheduler' => 'mc_view_partials_scheduler',
   'posts/composer' => 'mc_view_posts_composer',
   'posts/index' => 'mc_view_posts_index',
   'profile/edit' => 'mc_view_profile_edit',
@@ -13360,6 +13615,8 @@ function mc_view_admin_integrations(array $__vars): void
         <p class="muted">Instance-wide settings. Secrets are stored encrypted and never shown again; leave a secret blank to keep it.</p>
     </div>
 </div>
+
+<?php partial('partials/scheduler'); ?>
 
 <div class="service-list">
 <?php foreach ($groups as $key => $g): $v = $values[$key]; ?>
@@ -14782,8 +15039,12 @@ $greeting = $hour < 12 ? 'Good morning' : ($hour < 18 ? 'Good afternoon' : 'Good
         <div>
             <strong><?= $overdue ?> scheduled post<?= $overdue === 1 ? ' is' : 's are' ?> overdue.</strong>
             <?php if (Auth::isAdmin()): ?>
-                The scheduler isn’t running<?= $cronAge !== null ? ' (last run ' . e(round($cronAge / 60)) . ' minutes ago)' : '' ?>. Add this cron job on your server:
-                <code class="copy" data-copy>* * * * * <?= e(cron_command()) ?> &gt;/dev/null 2&gt;&amp;1</code>
+                The scheduler isn’t running<?= $cronAge !== null ? ' (last run ' . e(round($cronAge / 60)) . ' minutes ago)' : '' ?>.
+                <?php if (App\Scheduler::canInstall()): ?>
+                    <form class="inline-form" method="post" action="<?= e(url('/admin/scheduler/install')) ?>"><?= csrf_field() ?><input type="hidden" name="back" value="/"><button class="btn btn-sm btn-primary" type="submit">Set it up for me</button></form>
+                <?php else: ?>
+                    <a href="<?= e(url('/admin/integrations')) ?>#scheduler">See how to set it up</a>.
+                <?php endif; ?>
             <?php else: ?>
                 Ask your KreateMix admin to check the scheduler.
             <?php endif; ?>
@@ -16135,6 +16396,64 @@ function mc_view_partials_pwa_head(array $__vars): void
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="<?= e(App\Cloud::company()) ?>">
+<?php
+}
+
+}
+
+namespace {
+use App\Scheduler;
+
+// ---- view: partials/scheduler ----
+function mc_view_partials_scheduler(array $__vars): void
+{
+    extract($__vars, EXTR_SKIP);
+?><?php
+
+
+$age = Scheduler::lastRun();
+$src = Scheduler::lastSource();
+$installed = Scheduler::installed();
+$healthy = Scheduler::healthy();
+$ago = $age === null ? 'never' : ($age < 90 ? 'just now' : ($age < 5400 ? round($age / 60) . ' minutes ago' : ($age < 172800 ? round($age / 3600) . ' hours ago' : round($age / 86400) . ' days ago')));
+?>
+<section class="card scheduler-card" id="scheduler">
+    <div class="card-head">
+        <h2><?= icon('clock') ?> Scheduler</h2>
+        <span class="badge <?= $healthy ? 'sched-ok' : 'sched-bad' ?>"><?= $healthy ? 'Running' : 'Not running' ?></span>
+    </div>
+    <p class="muted small">Publishes scheduled posts, imports analytics and comments, and sends reports. Last run: <strong><?= e($ago) ?></strong><?= $src ? e(' (' . ['cli' => 'cron job', 'web' => 'after a page view', 'url' => 'cron URL'][$src] . ')') : '' ?>.</p>
+
+    <?php if ($installed): ?>
+        <?php if ($healthy): ?>
+            <div class="notice notice-success"><?= icon('check') ?><div>A cron job runs it every minute. Nothing else to do.</div></div>
+        <?php else: ?>
+            <div class="notice notice-info"><?= icon('clock') ?><div>A cron job is set to run it every minute; the first run happens within a minute. If this still says “Not running” in a few minutes, your host isn’t running cron jobs: use the cron URL below with a service such as cron-job.org instead.</div></div>
+        <?php endif; ?>
+        <form method="post" action="<?= e(url('/admin/scheduler/remove')) ?>" data-confirm="Remove the cron job? Scheduled posts will only go out while someone uses the site."><?= csrf_field() ?><button class="btn btn-sm" type="submit">Remove cron job</button></form>
+    <?php elseif (Scheduler::canInstall()): ?>
+        <form method="post" action="<?= e(url('/admin/scheduler/install')) ?>"><?= csrf_field() ?>
+            <p class="small">Your server lets KreateMix add its own cron job.</p>
+            <button class="btn btn-primary" type="submit"><?= icon('check') ?> Set it up for me</button>
+        </form>
+    <?php else: ?>
+        <p class="small">Add this cron job on your server, running every minute (on CloudPanel: your site → Cron Jobs):</p>
+        <code class="copy" data-copy><?= e(Scheduler::command()) ?></code>
+        <p class="small">No cron access? Have a free service such as cron-job.org open this address every minute:</p>
+        <code class="copy" data-copy><?= e(Scheduler::webCronUrl()) ?></code>
+    <?php endif; ?>
+
+    <form class="sched-web" method="post" action="<?= e(url('/admin/scheduler/web')) ?>"><?= csrf_field() ?>
+        <label class="check"><input type="checkbox" name="web" value="1" data-autosubmit <?= Scheduler::webFallbackEnabled() ? 'checked' : '' ?> <?= Scheduler::webFallbackPossible() ? '' : 'disabled' ?>>
+            <span class="small">Also run it after page views, as a backup<?= Scheduler::webFallbackPossible() ? '' : ' (needs PHP-FPM or LiteSpeed, not available here)' ?>. Visitors never wait for it, but it only runs while someone uses the site.</span></label>
+    </form>
+    <?php if ($installed || Scheduler::canInstall()): ?>
+        <details class="small"><summary>Manual setup</summary>
+            <p>Cron command: <code class="copy" data-copy><?= e(Scheduler::command()) ?></code></p>
+            <p>Or call every minute: <code class="copy" data-copy><?= e(Scheduler::webCronUrl()) ?></code></p>
+        </details>
+    <?php endif; ?>
+</section>
 <?php
 }
 
@@ -18604,6 +18923,14 @@ div.provider-tile.is-disabled:hover { border-color: var(--border); box-shadow: n
 .lead-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .lead-msg { margin: 8px 0 0; color: var(--text-2); }
 @media (max-width: 760px) { .billing-summary { grid-template-columns: 1fr; } }
+
+/* ---------- Scheduler ---------- */
+.scheduler-card { margin-bottom: 16px; }
+.scheduler-card .notice { margin: 10px 0; }
+.sched-ok { color: var(--ok); background: var(--ok-soft); }
+.sched-bad { color: var(--warn); background: var(--warn-soft); }
+.sched-web { margin-top: 14px; }
+.scheduler-card details { margin-top: 6px; }
 MC_ASSET_1],
         'app.js' => [false, <<<'MC_ASSET_2'
 /* KreateMix — vanilla JS, no build step. */
@@ -20107,7 +20434,7 @@ MC_ASSET_8],
 
     public static function version(): string
     {
-        return 'f50230a958';
+        return 'ff5c4af8ad';
     }
 
     /** Serves an asset with long caching (URLs carry a version). */
@@ -20291,6 +20618,9 @@ header('Referrer-Policy: same-origin');
 
 Hooks::loadModules();
 
+// Keeps scheduled posts going even without a cron job (runs after the response is sent).
+App\Scheduler::onRequest();
+
 $r = new Router();
 
 
@@ -20335,6 +20665,7 @@ $r->group(['auth'], function (Router $r) {
         $r->get('/admin/integrations', [IntegrationsController::class, 'index']);
         $r->post('/admin/integrations/smtp/test', [IntegrationsController::class, 'testEmail']);
         $r->post('/admin/integrations/ai/test', [IntegrationsController::class, 'testAi']);
+        $r->post('/admin/scheduler/{action}', [IntegrationsController::class, 'scheduler']);
         $r->post('/admin/integrations/{group}', [IntegrationsController::class, 'save']);
         $r->get('/admin/users', [UsersController::class, 'index']);
         $r->post('/admin/users/{id}/delete', [UsersController::class, 'delete']);

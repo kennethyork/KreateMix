@@ -47,13 +47,7 @@ Don't want to run a server? **KreateMix Cloud** is the hosted version, with a 7-
 
 1. Upload `index.php` to your site's web root (or any folder in it).
 2. Open the site in a browser and create the admin account.
-3. Add the scheduler to cron, running as the same user as PHP on your site:
-
-   ```
-   * * * * * php /path/to/index.php cron >/dev/null 2>&1
-   ```
-
-   No cron access? Call `https://your-site/cron?key=CRON_KEY` every minute from any uptime or cron service. `CRON_KEY` is in the settings file.
+3. That's it for the scheduler: KreateMix adds its own cron job when you create the admin account, if your host allows it. Check **Integrations → Scheduler**; see [Scheduler](#scheduler) for the other options.
 
 4. Optional: under **Integrations**, add a mail server (for emailed reports), an OpenRouter key for AI, Canva, Google Drive and ads platform keys.
 5. As the admin, open **Platform API keys** and add keys for the platforms you want. Each one shows the callback URL to register with the platform. Mastodon, Pixelfed, PeerTube and Bluesky need no keys.
@@ -76,7 +70,7 @@ On first run KreateMix writes, and never anything else:
 
 New to servers? The [self-hosting guide](https://kennethyork.github.io/KreateMix/self-host.html) walks through the whole setup on a 2 GB VPS from about $2 a month: installing CloudPanel, HTTPS, cron, backups and updates. The short version:
 
-Create a PHP site, upload `index.php` to `htdocs/your-domain`, and open the domain. No root directory change is needed. The database usually lands in `htdocs/`, outside the web root. Add the cron job under the site's **Cron Jobs** tab: `php /home/<site-user>/htdocs/<your-domain>/index.php cron` every minute. Raise **Upload max filesize** and **Post max size** in the site's PHP settings if you post videos.
+Create a PHP site, upload `index.php` to `htdocs/your-domain`, and open the domain. No root directory change is needed. The database usually lands in `htdocs/`, outside the web root. The scheduler's cron job is added automatically; if **Integrations → Scheduler** says otherwise, add `php /home/<site-user>/htdocs/<your-domain>/index.php cron` under the site's **Cron Jobs** tab, every minute. Raise **Upload max filesize** and **Post max size** in the site's PHP settings if you post videos.
 
 ### Nginx
 
@@ -112,6 +106,16 @@ php -S localhost:8000 index.php
 ```
 
 Set `'debug' => true` in the settings file to see errors and enable the **Sandbox** platform, which fakes publishing so you can test scheduling without real accounts.
+
+## Scheduler
+
+The scheduler publishes scheduled posts, imports analytics and comments, delivers webhooks and sends reports. It needs to run every minute, and KreateMix takes care of that itself:
+
+1. **Its own cron job.** On first setup (and from **Integrations → Scheduler → Set it up for me**) it adds `* * * * * php /path/to/index.php cron` to the web server user's crontab, when PHP is allowed to run the `crontab` command. Your other cron jobs are left alone. If a control panel later rewrites the crontab and drops the line, it's put back the next time an admin opens the dashboard or Integrations.
+2. **A backup on page views.** When the scheduler hasn't run for a minute, it runs right after a page has been sent, so nobody waits. This needs PHP-FPM or LiteSpeed (CloudPanel uses PHP-FPM), and only happens while someone uses the site. Switch it off under Integrations → Scheduler.
+3. **The cron URL.** If your host allows neither, have a free service such as cron-job.org open `https://your-site/cron?key=CRON_KEY` every minute (the exact address is shown under Integrations → Scheduler).
+
+Integrations → Scheduler shows when it last ran and how.
 
 ## Configuration
 
