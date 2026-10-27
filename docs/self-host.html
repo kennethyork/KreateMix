@@ -224,7 +224,7 @@ ls -l</code></pre>
     <p>For full-length videos, raise <strong>Post Max Size</strong> and <strong>Upload Max Filesize</strong> to the biggest file you'll post (for example <code>4G</code>), <strong>Max Execution Time</strong> to <code>3600</code>, and <code>client_max_body_size</code> in the Vhost to the same size. Then tell KreateMix: in <code>.ht.kreatemix-config.php</code> next to <code>index.php</code>, change <code>'max_upload_mb' =&gt; 200</code> to <code>'max_upload_mb' =&gt; 4096</code>. KreateMix sends videos to the networks straight from disk, so <strong>Memory Limit</strong> can stay at <code>256M</code>, and your server needs free disk space of about twice the video's size while it posts.</p>
 
     <h2 id="platforms">12. Connect your social networks</h2>
-    <p>Each network needs a free developer app that you create on its website, apart from Mastodon, Pixelfed, PeerTube, Loops and Bluesky.</p>
+    <p>Each network needs a free developer app that you create on its website, apart from Mastodon, Pixelfed, PeerTube, Loops, Lemmy, Bluesky, Telegram and Discord.</p>
     <ol>
       <li>In KreateMix, open <strong>Platform API keys</strong> (instance admins only).</li>
       <li>Each network's panel shows a <strong>callback URL</strong> starting with <code>https://social.yourdomain.com/</code>. Copy it exactly into the developer app you create on that network's site.</li>
@@ -235,6 +235,10 @@ ls -l</code></pre>
       <tr><th>Network</th><th>What you need</th></tr>
       <tr><td>Mastodon, Pixelfed, Bluesky</td><td>Nothing. Connect straight away (Bluesky uses an app password).</td></tr>
       <tr><td>PeerTube</td><td>Just an account on any public PeerTube server (find one at <a href="https://joinpeertube.org/browse-content">joinpeertube.org</a>). You don't run a video server yourself.</td></tr>
+      <tr><td>Lemmy</td><td>Just a Lemmy account. Pick the community to post in when you connect.</td></tr>
+      <tr><td>Telegram</td><td>A bot from <strong>@BotFather</strong> in Telegram, added to your channel as an admin that can post</td></tr>
+      <tr><td>Discord</td><td>A webhook from the channel's settings (Integrations → Webhooks)</td></tr>
+      <tr><td>Tumblr</td><td>An app at <a href="https://www.tumblr.com/oauth/apps">tumblr.com/oauth/apps</a></td></tr>
       <tr><td>Loops</td><td>Just a Loops account, on <a href="https://loops.video">loops.video</a> or another Loops server. Posts are one MP4 video each.</td></tr>
       <tr><td>Facebook, Instagram, Threads</td><td>A Meta developer app</td></tr>
       <tr><td>LinkedIn</td><td>A LinkedIn developer app</td></tr>

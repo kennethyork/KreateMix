@@ -430,7 +430,7 @@ function account_avatar(array $a, string $size = ''): string
 /** Small colored platform marker with a short abbreviation (no brand logos). */
 function provider_badge(string $key, string $class = 'pbadge'): string
 {
-    $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'peertube' => 'PT', 'loops' => 'L', 'vimeo' => 'V', 'dailymotion' => 'D', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in',
+    $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'peertube' => 'PT', 'loops' => 'L', 'vimeo' => 'V', 'dailymotion' => 'D', 'lemmy' => 'Le', 'tumblr' => 't', 'telegram' => 'Tg', 'discord' => 'Dc', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in',
         'youtube' => 'YT', 'threads' => 'Th', 'tiktok' => 'TT', 'pinterest' => 'P', 'google_business' => 'G', 'sandbox' => 'S'];
     $meta = provider_meta($key);
     return '<span class="' . e($class) . '" style="--pc: ' . e($meta['color']) . '" aria-hidden="true">' . e($abbr[$key] ?? strtoupper(substr($key, 0, 1))) . '</span>';
@@ -958,6 +958,12 @@ abstract class OAuth2Provider extends Provider
             sleep($interval);
         } while (time() < $deadline);
         throw new ProviderException(static::name() . ' is still processing the media. Try again in a few minutes.');
+    }
+
+    /** splitTitle() for providers that don't use OAuth. */
+    public static function splitTitlePublic(string $text, int $max): array
+    {
+        return self::splitTitle($text, $max);
     }
 
     /** First line becomes a title (for YouTube, Pinterest, TikTok photos). */
@@ -4129,6 +4135,9 @@ final class BioController
             'loops' => str_contains($u, '@') ? 'https://' . explode('@', $u)[1] . '/@' . explode('@', $u)[0] : null,
             'vimeo' => ($data['link'] ?? '') ?: ($u ? "https://vimeo.com/$u" : null),
             'dailymotion' => $u ? "https://www.dailymotion.com/$u" : null,
+            'tumblr' => $u ? "https://www.tumblr.com/$u" : null,
+            'telegram' => $u ? "https://t.me/$u" : null,
+            'lemmy' => !empty($data['community']) ? 'https://' . ($data['server'] ?? '') . '/c/' . $data['community'] : null,
             'instagram' => $u ? "https://www.instagram.com/$u/" : null,
             'threads' => $u ? "https://www.threads.net/@$u" : null,
             'tiktok' => $u ? "https://www.tiktok.com/@$u" : null,
@@ -11335,6 +11344,537 @@ final class Dailymotion extends OAuth2Provider
 
 namespace App\Providers {
 
+// ---- Providers/Telegram.php ----
+use App\Http;
+use App\MediaTools;
+
+/** Telegram channels and groups, posted by your own bot (made with @BotFather) that is an admin there. */
+final class Telegram extends Provider
+{
+    public static function key(): string { return 'telegram'; }
+    public static function name(): string { return 'Telegram'; }
+    public static function color(): string { return '#229ed9'; }
+    public static function textLimit(): int { return 4096; }
+    public static function implemented(): bool { return true; }
+    public static function usesOAuth(): bool { return false; }
+
+    public static function mediaRules(): array
+    {
+        return ['max_media' => 10, 'video' => true, 'requires_media' => false, 'requires_video' => false];
+    }
+
+    public static function connectFields(): array
+    {
+        return [
+            'bot_token' => ['label' => 'Bot token (from @BotFather)', 'type' => 'password', 'placeholder' => '123456789:AA…'],
+            'channel' => ['label' => 'Channel or group', 'type' => 'text', 'placeholder' => '@yourchannel or t.me/yourchannel'],
+        ];
+    }
+
+    public static function setupHint(): string
+    {
+        return 'No keys needed here. In Telegram, message @BotFather, send /newbot and copy the token it gives you. Add the bot to your channel as an admin that can post messages, then enter the token and the channel below. Photos up to 10 MB and videos up to 50 MB (Telegram’s limit for bots); captions on posts with media are cut to 1,024 characters, so longer text follows as its own message.';
+    }
+
+    private function call(string $method, array $options = [], ?string $botToken = null): mixed
+    {
+        $token = $botToken ?? (string) ($this->token()['bot_token'] ?? '');
+        $res = Http::post('https://api.telegram.org/bot' . $token . '/' . $method, $options + ['timeout' => 600]);
+        if (empty($res['json']['ok'])) {
+            $msg = 'Telegram: ' . ($res['json']['description'] ?? 'HTTP ' . $res['status']);
+            throw $res['status'] === 401 ? ProviderException::unauthorized($msg . '. Check the bot token.') : new ProviderException($msg);
+        }
+        return $res['json']['result'];
+    }
+
+    private static function chatRef(string $raw): string
+    {
+        $raw = trim($raw);
+        if (preg_match('#^(?:https?://)?(?:t\.me|telegram\.me)/(?:s/)?([A-Za-z0-9_]{4,})#', $raw, $m)) {
+            return '@' . $m[1];
+        }
+        if (preg_match('/^-?\d+$/', $raw)) {
+            return $raw;
+        }
+        $raw = ltrim($raw, '@');
+        if (!preg_match('/^[A-Za-z0-9_]{4,}$/', $raw)) {
+            throw new ProviderException('Enter the channel as @name, a t.me link, or its numeric id.');
+        }
+        return '@' . $raw;
+    }
+
+    public function connect(array $input, string $redirectUri): array
+    {
+        $botToken = trim((string) ($input['bot_token'] ?? ''));
+        if (!preg_match('/^\d+:[\w-]{30,}$/', $botToken)) {
+            throw new ProviderException('That doesn’t look like a bot token. @BotFather gives one like 123456789:AAH…');
+        }
+        $bot = $this->call('getMe', [], $botToken);
+        $chat = $this->call('getChat', ['form' => ['chat_id' => self::chatRef((string) ($input['channel'] ?? ''))]], $botToken);
+        $member = $this->call('getChatMember', ['form' => ['chat_id' => $chat['id'], 'user_id' => $bot['id']]], $botToken);
+        if (!in_array($member['status'] ?? '', ['administrator', 'creator'], true) || (($chat['type'] ?? '') === 'channel' && empty($member['can_post_messages']))) {
+            throw new ProviderException('Make @' . ($bot['username'] ?? 'your bot') . ' an admin of ' . ($chat['title'] ?? 'the channel') . ' with permission to post messages, then try again.');
+        }
+        return [[
+            'provider_id' => (string) $chat['id'],
+            'name' => (string) ($chat['title'] ?? $chat['username'] ?? 'Telegram'),
+            'username' => (string) ($chat['username'] ?? ''),
+            'avatar' => null,
+            'token' => ['bot_token' => $botToken],
+            'data' => ['chat_id' => (string) $chat['id'], 'bot' => (string) ($bot['username'] ?? '')],
+        ]];
+    }
+
+    /** Public link to a message: t.me/name/123, or t.me/c/<id>/123 for private channels. */
+    private function link(int $messageId): ?string
+    {
+        $u = (string) ($this->account['username'] ?? '');
+        if ($u !== '') {
+            return "https://t.me/$u/$messageId";
+        }
+        $id = (string) ($this->accountData()['chat_id'] ?? '');
+        return str_starts_with($id, '-100') ? 'https://t.me/c/' . substr($id, 4) . "/$messageId" : null;
+    }
+
+    public function publish(string $text, array $media): array
+    {
+        $chat = (string) ($this->accountData()['chat_id'] ?? $this->account['provider_id'] ?? '');
+        $text = trim($text);
+        $media = array_slice($media, 0, 10);
+        foreach ($media as $i => $m) {
+            if (MediaTools::isVideo($m)) {
+                if ((int) $m['size'] > 50 * 1024 * 1024) {
+                    throw new ProviderException('Telegram bots can send videos up to 50 MB. Use a shorter or smaller video.');
+                }
+            } else {
+                $media[$i] = MediaTools::fit($m, 10 * 1024 * 1024);
+            }
+        }
+        $caption = mb_strlen($text) <= 1024 ? $text : '';
+        if (!$media) {
+            $msg = $this->call('sendMessage', ['json' => ['chat_id' => $chat, 'text' => $text]]);
+            return ['id' => (string) $msg['message_id'], 'url' => $this->link((int) $msg['message_id'])];
+        }
+        if (count($media) === 1) {
+            $m = $media[0];
+            $video = MediaTools::isVideo($m);
+            $first = $this->call($video ? 'sendVideo' : 'sendPhoto', ['multipart' => array_filter([
+                'chat_id' => $chat,
+                $video ? 'video' : 'photo' => new \CURLFile($m['path'], $m['mime'], $m['name']),
+                'caption' => $caption,
+                'supports_streaming' => $video ? 'true' : '',
+            ], fn($v) => $v !== '')]);
+        } else {
+            $parts = ['chat_id' => $chat];
+            $items = [];
+            foreach ($media as $i => $m) {
+                $parts["f$i"] = new \CURLFile($m['path'], $m['mime'], $m['name']);
+                $items[] = array_filter(['type' => MediaTools::isVideo($m) ? 'video' : 'photo', 'media' => "attach://f$i", 'caption' => $i === 0 ? $caption : ''], fn($v) => $v !== '');
+            }
+            $parts['media'] = json_encode($items, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $first = $this->call('sendMediaGroup', ['multipart' => $parts])[0];
+        }
+        if ($caption === '' && $text !== '') {
+            $this->call('sendMessage', ['json' => ['chat_id' => $chat, 'text' => $text]]);
+        }
+        return ['id' => (string) $first['message_id'], 'url' => $this->link((int) $first['message_id'])];
+    }
+
+    public function accountMetrics(): array
+    {
+        $n = $this->call('getChatMemberCount', ['form' => ['chat_id' => $this->accountData()['chat_id'] ?? $this->account['provider_id']]]);
+        return is_int($n) ? ['followers' => $n] : [];
+    }
+}
+
+}
+
+namespace App\Providers {
+
+// ---- Providers/Discord.php ----
+use App\Http;
+use App\MediaTools;
+
+/** Discord: posts into a server channel through a webhook (channel settings → Integrations → Webhooks). */
+final class Discord extends Provider
+{
+    private const WEBHOOK = '#^https://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/webhooks/(\d+)/([\w-]+)$#';
+
+    public static function key(): string { return 'discord'; }
+    public static function name(): string { return 'Discord'; }
+    public static function color(): string { return '#5865f2'; }
+    public static function textLimit(): int { return 2000; }
+    public static function implemented(): bool { return true; }
+    public static function usesOAuth(): bool { return false; }
+
+    public static function mediaRules(): array
+    {
+        return ['max_media' => 10, 'video' => true, 'requires_media' => false, 'requires_video' => false];
+    }
+
+    public static function connectFields(): array
+    {
+        return ['webhook_url' => ['label' => 'Webhook URL', 'type' => 'password', 'placeholder' => 'https://discord.com/api/webhooks/…']];
+    }
+
+    public static function setupHint(): string
+    {
+        return 'No keys needed. In Discord, open the channel’s settings → Integrations → Webhooks → New Webhook, give it a name and picture, click “Copy Webhook URL” and paste it below. Each channel is its own account. Files can be up to 10 MB each (Discord’s limit without server boosts). Posts never ping @everyone or roles.';
+    }
+
+    public function connect(array $input, string $redirectUri): array
+    {
+        $url = trim((string) ($input['webhook_url'] ?? ''));
+        if (!preg_match(self::WEBHOOK, $url)) {
+            throw new ProviderException('Paste the full webhook URL from Discord. It starts with https://discord.com/api/webhooks/');
+        }
+        $res = Http::get($url);
+        if (!Http::ok($res) || empty($res['json']['id'])) {
+            throw new ProviderException('Discord didn’t accept that webhook. It may have been deleted; create a new one and try again.');
+        }
+        $w = $res['json'];
+        return [[
+            'provider_id' => (string) $w['id'],
+            'name' => (string) ($w['name'] ?? 'Discord webhook'),
+            'username' => '',
+            'avatar' => !empty($w['avatar']) ? 'https://cdn.discordapp.com/avatars/' . $w['id'] . '/' . $w['avatar'] . '.png' : null,
+            'token' => ['webhook_url' => $url],
+            'data' => ['guild_id' => (string) ($w['guild_id'] ?? ''), 'channel_id' => (string) ($w['channel_id'] ?? '')],
+        ]];
+    }
+
+    public function publish(string $text, array $media): array
+    {
+        $url = (string) ($this->token()['webhook_url'] ?? '');
+        $payload = ['content' => mb_substr($text, 0, 2000), 'allowed_mentions' => ['parse' => []]];
+        $parts = [];
+        foreach (array_slice($media, 0, 10) as $i => $m) {
+            if (!MediaTools::isVideo($m)) {
+                $m = MediaTools::fit($m, 10 * 1024 * 1024);
+            } elseif ((int) $m['size'] > 10 * 1024 * 1024) {
+                throw new ProviderException('Discord webhooks take files up to 10 MB. Use a smaller video.');
+            }
+            $parts["files[$i]"] = new \CURLFile($m['path'], $m['mime'], $m['name']);
+        }
+        $options = $parts ? ['multipart' => ['payload_json' => json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)] + $parts] : ['json' => $payload];
+        $res = Http::post($url . '?wait=true', $options + ['timeout' => 300]);
+        if (!Http::ok($res)) {
+            $msg = 'Discord: ' . ($res['json']['message'] ?? 'HTTP ' . $res['status']);
+            throw in_array($res['status'], [401, 404], true) ? ProviderException::unauthorized($msg . '. The webhook may have been deleted; reconnect with a new one.') : new ProviderException($msg);
+        }
+        $id = (string) ($res['json']['id'] ?? '');
+        $d = $this->accountData();
+        $link = $id !== '' && ($d['guild_id'] ?? '') !== '' ? 'https://discord.com/channels/' . $d['guild_id'] . '/' . ($res['json']['channel_id'] ?? $d['channel_id']) . '/' . $id : null;
+        return ['id' => $id, 'url' => $link];
+    }
+}
+
+}
+
+namespace App\Providers {
+
+// ---- Providers/Tumblr.php ----
+use App\MediaTools;
+
+/** Tumblr: posts in the Neue Post Format. Each blog you can post to is its own account; #hashtags become Tumblr tags. */
+final class Tumblr extends OAuth2Provider
+{
+    private const API = 'https://api.tumblr.com/v2';
+
+    public static function key(): string { return 'tumblr'; }
+    public static function name(): string { return 'Tumblr'; }
+    public static function color(): string { return '#36465d'; }
+    public static function textLimit(): int { return 4096; }
+    public static function implemented(): bool { return true; }
+
+    public static function mediaRules(): array
+    {
+        return ['max_media' => 10, 'video' => true, 'requires_media' => false, 'requires_video' => false];
+    }
+
+    public static function credentialFields(): array
+    {
+        return ['client_id' => 'OAuth consumer key', 'client_secret' => 'OAuth consumer secret'];
+    }
+
+    public static function setupHint(): string
+    {
+        return 'At tumblr.com/oauth/apps register an application, and put the callback URL below in both “Default callback URL” and “OAuth2 redirect URLs”. Each blog you can post to becomes its own account. #hashtags in a post also become Tumblr tags. One video per post, or up to 10 images.';
+    }
+
+    protected function authorizeEndpoint(): string { return 'https://www.tumblr.com/oauth2/authorize'; }
+    protected function tokenEndpoint(): string { return self::API . '/oauth2/token'; }
+    protected function scopes(): array { return ['basic', 'write', 'offline_access']; }
+
+    public function connect(array $input, string $redirectUri): array
+    {
+        $token = $this->exchangeCode($input, $redirectUri);
+        $this->account = ['token' => $token];
+        $user = $this->api('GET', self::API . '/user/info')['json']['response']['user'] ?? [];
+        $out = [];
+        foreach ($user['blogs'] ?? [] as $b) {
+            if (isset($b['admin']) && !$b['admin']) {
+                continue;
+            }
+            $out[] = [
+                'provider_id' => (string) ($b['uuid'] ?? $b['name']),
+                'name' => (string) (($b['title'] ?? '') ?: $b['name']),
+                'username' => (string) $b['name'],
+                'avatar' => 'https://api.tumblr.com/v2/blog/' . rawurlencode($b['name']) . '/avatar/128',
+                'token' => $token,
+                'data' => ['blog' => (string) $b['name']],
+            ];
+        }
+        if (!$out) {
+            throw new ProviderException('This Tumblr account has no blogs you can post to.');
+        }
+        return $out;
+    }
+
+    private function blog(): string
+    {
+        return (string) ($this->accountData()['blog'] ?? $this->account['username'] ?? '');
+    }
+
+    public function publish(string $text, array $media): array
+    {
+        $content = [];
+        $parts = [];
+        $videos = array_values(array_filter($media, [MediaTools::class, 'isVideo']));
+        if ($videos) {
+            $v = $videos[0];
+            $parts['vid0'] = new \CURLFile($v['path'], $v['mime'], $v['name']);
+            $content[] = ['type' => 'video', 'media' => array_filter(['type' => $v['mime'], 'identifier' => 'vid0', 'width' => $v['width'] ?? null, 'height' => $v['height'] ?? null])];
+        } else {
+            foreach (array_slice($media, 0, 10) as $i => $m) {
+                $m = MediaTools::fit($m, 10 * 1024 * 1024);
+                $parts["img$i"] = new \CURLFile($m['path'], $m['mime'], $m['name']);
+                $content[] = ['type' => 'image', 'media' => [array_filter(['type' => $m['mime'], 'identifier' => "img$i", 'width' => $m['width'] ?? null, 'height' => $m['height'] ?? null])]];
+            }
+        }
+        foreach (preg_split('/\R{2,}/u', trim($text)) as $para) {
+            if (trim($para) !== '') {
+                $content[] = ['type' => 'text', 'text' => trim($para)];
+            }
+        }
+        preg_match_all('/(?<![\w&])#([\p{L}\p{N}_]+)/u', $text, $tags);
+        $body = array_filter(['content' => $content, 'state' => 'published', 'tags' => implode(',', array_unique($tags[1]))], fn($v) => $v !== '');
+        $url = self::API . '/blog/' . rawurlencode($this->blog()) . '/posts';
+        $res = $parts
+            ? $this->api('POST', $url, ['multipart' => ['json' => json_encode($body, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)] + $parts, 'timeout' => 1800])
+            : $this->api('POST', $url, ['json' => $body]);
+        $id = (string) ($res['json']['response']['id_string'] ?? $res['json']['response']['id'] ?? '');
+        if ($id === '') {
+            throw new ProviderException('Tumblr didn’t return the new post.');
+        }
+        return ['id' => $id, 'url' => 'https://www.tumblr.com/' . $this->blog() . '/' . $id];
+    }
+
+    public function accountMetrics(): array
+    {
+        $b = $this->api('GET', self::API . '/blog/' . rawurlencode($this->blog()) . '/info')['json']['response']['blog'] ?? [];
+        return isset($b['followers']) ? ['followers' => (int) $b['followers']] : [];
+    }
+
+    public function postMetrics(string $providerPostId): array
+    {
+        $p = $this->api('GET', self::API . '/blog/' . rawurlencode($this->blog()) . '/posts', ['query' => ['id' => $providerPostId]])['json']['response']['posts'][0] ?? [];
+        return isset($p['note_count']) ? ['likes' => (int) $p['note_count']] : [];
+    }
+}
+
+}
+
+namespace App\Providers {
+
+// ---- Providers/Lemmy.php ----
+use App\Http;
+use App\MediaTools;
+
+/**
+ * Lemmy: link aggregator on the fediverse. Signs in with username and password on any Lemmy server
+ * (API v3, Lemmy 0.19) and posts into one community. First line is the post title, the rest is the body.
+ */
+final class Lemmy extends Provider
+{
+    public static function key(): string { return 'lemmy'; }
+    public static function name(): string { return 'Lemmy'; }
+    public static function color(): string { return '#00bc8c'; }
+    public static function textLimit(): int { return 10000; }
+    public static function implemented(): bool { return true; }
+    public static function usesOAuth(): bool { return false; }
+
+    public static function mediaRules(): array
+    {
+        return ['max_media' => 1, 'video' => false, 'requires_media' => false, 'requires_video' => false];
+    }
+
+    public static function connectFields(): array
+    {
+        return [
+            'server' => ['label' => 'Server', 'type' => 'text', 'placeholder' => 'lemmy.world'],
+            'username' => ['label' => 'Username or email', 'type' => 'text', 'placeholder' => 'you'],
+            'password' => ['label' => 'Password', 'type' => 'password', 'placeholder' => ''],
+            'totp' => ['label' => 'Two-factor code (only if you turned it on)', 'type' => 'text', 'placeholder' => '123456'],
+            'community' => ['label' => 'Community to post in', 'type' => 'text', 'placeholder' => 'technology or technology@lemmy.world'],
+        ];
+    }
+
+    public static function setupHint(): string
+    {
+        return 'No keys needed: sign in with your Lemmy account (KreateMix keeps a sign-in token, not your password). Each community you connect is its own account. The first line of a post is the title (max 200 characters) and the rest is the body, in Markdown. An image is uploaded to your server and becomes the post’s image; without one, the first link in the text becomes the post’s link. Check each community’s rules before scheduling posts there.';
+    }
+
+    private function base(?string $server = null): string
+    {
+        return 'https://' . ($server ?? (string) ($this->accountData()['server'] ?? ''));
+    }
+
+    private function call(string $method, string $path, array $options = [], ?string $server = null, ?string $jwt = null): array
+    {
+        $jwt ??= (string) ($this->token()['jwt'] ?? '');
+        if ($jwt !== '') {
+            $options['headers'] = ($options['headers'] ?? []) + ['Authorization' => 'Bearer ' . $jwt];
+        }
+        $res = Http::request($method, $this->base($server) . $path, $options + ['timeout' => 120]);
+        if (!Http::ok($res)) {
+            $err = is_string($res['json']['error'] ?? null) ? str_replace('_', ' ', $res['json']['error']) : 'HTTP ' . $res['status'];
+            $msg = 'Lemmy: ' . $err;
+            throw in_array($res['status'], [401], true) || in_array($res['json']['error'] ?? '', ['not_logged_in', 'incorrect_login'], true) ? ProviderException::unauthorized($msg) : new ProviderException($msg);
+        }
+        return $res['json'];
+    }
+
+    private static function cleanServer(string $raw): string
+    {
+        $raw = strtolower(trim($raw));
+        $raw = preg_replace('#^https?://#', '', $raw);
+        $host = explode('/', $raw)[0];
+        if (!preg_match('/^[a-z0-9.-]+\.[a-z]{2,}$/', $host)) {
+            throw new ProviderException('Enter the server’s domain, like lemmy.world.');
+        }
+        return $host;
+    }
+
+    public function connect(array $input, string $redirectUri): array
+    {
+        $server = self::cleanServer((string) ($input['server'] ?? ''));
+        $community = ltrim(trim((string) ($input['community'] ?? '')), '!');
+        $community = preg_replace('#^(?:https?://[^/]+)?/?c/#', '', $community);
+        if (!preg_match('/^[a-z0-9_]+(@[a-z0-9.-]+\.[a-z]{2,})?$/i', $community)) {
+            throw new ProviderException('Enter the community’s name, like technology, or technology@lemmy.world for one on another server.');
+        }
+        $login = $this->call('POST', '/api/v3/user/login', ['json' => array_filter([
+            'username_or_email' => trim((string) ($input['username'] ?? '')),
+            'password' => (string) ($input['password'] ?? ''),
+            'totp_2fa_token' => preg_replace('/\s+/', '', (string) ($input['totp'] ?? '')),
+        ], fn($v) => $v !== '')], $server, '');
+        $jwt = (string) ($login['jwt'] ?? '');
+        if ($jwt === '') {
+            throw new ProviderException('Lemmy didn’t sign you in. If the account is new, confirm your email or wait for the server to approve it.');
+        }
+        $site = $this->call('GET', '/api/v3/site', [], $server, $jwt);
+        $person = $site['my_user']['local_user_view']['person'] ?? [];
+        $cv = $this->call('GET', '/api/v3/community', ['query' => ['name' => $community]], $server, $jwt)['community_view'] ?? [];
+        $c = $cv['community'] ?? [];
+        if (empty($c['id'])) {
+            throw new ProviderException("Couldn’t find the community $community on $server.");
+        }
+        $host = parse_url((string) ($c['actor_id'] ?? ''), PHP_URL_HOST) ?: $server;
+        return [[
+            'provider_id' => $server . ':' . $c['id'] . ':' . ($person['id'] ?? ''),
+            'name' => (string) (($c['title'] ?? '') ?: $c['name']) . ' (c/' . $c['name'] . ')',
+            'username' => ($person['name'] ?? '') . '@' . $server,
+            'avatar' => $c['icon'] ?? ($person['avatar'] ?? null),
+            'token' => ['jwt' => $jwt],
+            'data' => ['server' => $server, 'community_id' => (int) $c['id'], 'community' => $c['name'] . '@' . $host, 'person_id' => (int) ($person['id'] ?? 0)],
+        ]];
+    }
+
+    public function publish(string $text, array $media): array
+    {
+        $d = $this->accountData();
+        [$title, $body] = OAuth2Provider::splitTitlePublic($text, 200);
+        if ($title === '') {
+            throw new ProviderException('Lemmy posts need a title: write it on the first line.');
+        }
+        $url = null;
+        $images = array_values(array_filter($media, fn($m) => !MediaTools::isVideo($m)));
+        if ($images) {
+            $img = MediaTools::fit($images[0], 10 * 1024 * 1024);
+            $up = $this->call('POST', '/pictrs/image', ['multipart' => ['images[]' => new \CURLFile($img['path'], $img['mime'], $img['name'])], 'timeout' => 300]);
+            $file = $up['files'][0]['file'] ?? '';
+            if ($file === '') {
+                throw new ProviderException('Lemmy didn’t accept the image' . (!empty($up['msg']) ? ': ' . $up['msg'] : '.'));
+            }
+            $url = $this->base() . '/pictrs/image/' . $file;
+        } elseif (preg_match('#https?://[^\s<>"]+#u', $text, $m)) {
+            $url = rtrim($m[0], '.,;:!?)');
+        }
+        $post = $this->call('POST', '/api/v3/post', ['json' => array_filter([
+            'name' => $title,
+            'community_id' => (int) ($d['community_id'] ?? 0),
+            'body' => $body !== '' ? $body : null,
+            'url' => $url,
+        ], fn($v) => $v !== null)])['post_view']['post'] ?? [];
+        if (empty($post['id'])) {
+            throw new ProviderException('Lemmy didn’t return the new post.');
+        }
+        return ['id' => (string) $post['id'], 'url' => $this->base() . '/post/' . $post['id']];
+    }
+
+    public function accountMetrics(): array
+    {
+        $cv = $this->call('GET', '/api/v3/community', ['query' => ['id' => (int) ($this->accountData()['community_id'] ?? 0)]])['community_view'] ?? [];
+        return isset($cv['counts']['subscribers']) ? ['followers' => (int) $cv['counts']['subscribers']] : [];
+    }
+
+    public function postMetrics(string $providerPostId): array
+    {
+        $c = $this->call('GET', '/api/v3/post', ['query' => ['id' => (int) $providerPostId]])['post_view']['counts'] ?? [];
+        return $c ? ['likes' => (int) ($c['upvotes'] ?? $c['score'] ?? 0), 'replies' => (int) ($c['comments'] ?? 0)] : [];
+    }
+
+    public static function supportsComments(): bool { return true; }
+
+    public function comments(string $providerPostId): array
+    {
+        $r = $this->call('GET', '/api/v3/comment/list', ['query' => ['post_id' => (int) $providerPostId, 'sort' => 'New', 'limit' => 50, 'type_' => 'All']]);
+        $me = (int) ($this->accountData()['person_id'] ?? 0);
+        $out = [];
+        foreach ($r['comments'] ?? [] as $cv) {
+            $c = $cv['comment'] ?? [];
+            $p = $cv['creator'] ?? [];
+            if (empty($c['id']) || !empty($c['deleted']) || !empty($c['removed'])) {
+                continue;
+            }
+            $out[] = [
+                'id' => (string) $c['id'],
+                'text' => trim((string) ($c['content'] ?? '')),
+                'author_name' => (string) (($p['display_name'] ?? '') ?: ($p['name'] ?? '')),
+                'author_handle' => ($p['name'] ?? '') . '@' . (parse_url((string) ($p['actor_id'] ?? ''), PHP_URL_HOST) ?: ''),
+                'author_avatar' => $p['avatar'] ?? null,
+                'created_at' => gmdate('Y-m-d H:i:s', strtotime(($c['published'] ?? 'now') . (preg_match('/[zZ]|[+-]\d\d:?\d\d$/', (string) ($c['published'] ?? '')) ? '' : 'Z'))),
+                'url' => $c['ap_id'] ?? null,
+                'reply_ref' => '',
+                'own' => (int) ($p['id'] ?? 0) === $me,
+            ];
+        }
+        usort($out, fn($a, $b) => strcmp($a['created_at'], $b['created_at']));
+        return $out;
+    }
+
+    public function reply(array $item, string $text): array
+    {
+        $c = $this->call('POST', '/api/v3/comment', ['json' => ['content' => $text, 'post_id' => (int) $item['root_ref'], 'parent_id' => (int) $item['provider_item_id']]])['comment_view']['comment'] ?? [];
+        return ['id' => (string) ($c['id'] ?? ''), 'url' => $c['ap_id'] ?? null];
+    }
+}
+
+}
+
+namespace App\Providers {
+
 // ---- Providers/Pinterest.php ----
 use App\MediaTools;
 
@@ -11461,6 +12001,7 @@ final class Registry
         Pixelfed::class,
         PeerTube::class,
         Loops::class,
+        Lemmy::class,
         Bluesky::class,
         Facebook::class,
         Instagram::class,
@@ -11471,6 +12012,9 @@ final class Registry
         Threads::class,
         TikTok::class,
         Pinterest::class,
+        Tumblr::class,
+        Telegram::class,
+        Discord::class,
         GoogleBusiness::class,
     ];
 
@@ -15594,7 +16138,7 @@ $radius = ($theme['button'] ?? 'rounded') === 'square' ? '8px' : '999px';
     <?php if ($page['bio'] !== ''): ?><p class="bio"><?= e($page['bio']) ?></p><?php endif; ?>
     <?php if ($socials): ?>
         <nav class="socials" aria-label="Social profiles">
-            <?php foreach ($socials as $href => $a): $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'peertube' => 'PT', 'loops' => 'L', 'vimeo' => 'V', 'dailymotion' => 'D', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in', 'youtube' => 'YT', 'threads' => '@', 'tiktok' => 'TT', 'pinterest' => 'P'][$a['provider']] ?? '•'; ?>
+            <?php foreach ($socials as $href => $a): $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'peertube' => 'PT', 'loops' => 'L', 'vimeo' => 'V', 'dailymotion' => 'D', 'lemmy' => 'Le', 'tumblr' => 't', 'telegram' => 'Tg', 'discord' => 'Dc', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in', 'youtube' => 'YT', 'threads' => '@', 'tiktok' => 'TT', 'pinterest' => 'P'][$a['provider']] ?? '•'; ?>
                 <a href="<?= e($href) ?>" target="_blank" rel="noopener me" title="<?= e(provider_meta($a['provider'])['name']) ?>" aria-label="<?= e(provider_meta($a['provider'])['name']) ?>"><?= e($abbr) ?></a>
             <?php endforeach; ?>
         </nav>
@@ -20556,7 +21100,7 @@ MC_ASSET_1],
             return String(name || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
         }
         function abbr(key) {
-            return { x: 'X', mastodon: 'M', pixelfed: 'Px', peertube: 'PT', loops: 'L', vimeo: 'V', dailymotion: 'D', bluesky: 'B', facebook: 'f', instagram: 'IG', linkedin: 'in', youtube: 'YT', threads: 'Th', tiktok: 'TT', pinterest: 'P', google_business: 'G', sandbox: 'S' }[key] || key[0].toUpperCase();
+            return { x: 'X', mastodon: 'M', pixelfed: 'Px', peertube: 'PT', loops: 'L', vimeo: 'V', dailymotion: 'D', lemmy: 'Le', tumblr: 't', telegram: 'Tg', discord: 'Dc', bluesky: 'B', facebook: 'f', instagram: 'IG', linkedin: 'in', youtube: 'YT', threads: 'Th', tiktok: 'TT', pinterest: 'P', google_business: 'G', sandbox: 'S' }[key] || key[0].toUpperCase();
         }
 
         form.addEventListener('input', update);
