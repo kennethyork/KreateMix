@@ -378,7 +378,7 @@ function account_avatar(array $a, string $size = ''): string
 /** Small colored platform marker with a short abbreviation (no brand logos). */
 function provider_badge(string $key, string $class = 'pbadge'): string
 {
-    $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in',
+    $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'peertube' => 'PT', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in',
         'youtube' => 'YT', 'threads' => 'Th', 'tiktok' => 'TT', 'pinterest' => 'P', 'google_business' => 'G', 'sandbox' => 'S'];
     $meta = provider_meta($key);
     return '<span class="' . e($class) . '" style="--pc: ' . e($meta['color']) . '" aria-hidden="true">' . e($abbr[$key] ?? strtoupper(substr($key, 0, 1))) . '</span>';
@@ -3955,6 +3955,7 @@ final class BioController
             'bluesky' => $u ? "https://bsky.app/profile/$u" : null,
             'mastodon' => str_contains($u, '@') ? 'https://' . explode('@', $u)[1] . '/@' . explode('@', $u)[0] : null,
             'pixelfed' => str_contains($u, '@') ? 'https://' . explode('@', $u)[1] . '/' . explode('@', $u)[0] : null,
+            'peertube' => str_contains($u, '@') ? 'https://' . explode('@', $u)[1] . '/c/' . explode('@', $u)[0] : null,
             'instagram' => $u ? "https://www.instagram.com/$u/" : null,
             'threads' => $u ? "https://www.threads.net/@$u" : null,
             'tiktok' => $u ? "https://www.tiktok.com/@$u" : null,
@@ -10271,6 +10272,238 @@ final class Pixelfed extends Mastodon
 
 namespace App\Providers {
 
+// ---- Providers/PeerTube.php ----
+use App\Http;
+use App\MediaTools;
+
+/**
+ * PeerTube: open-source video hosting on any public server. Each server hands out its own
+ * client keys, and the user signs in with their username and password (OAuth password grant).
+ * Each video channel is connected as its own account. First line of the post is the title.
+ */
+final class PeerTube extends OAuth2Provider
+{
+    protected string $server = '';
+
+    public static function key(): string { return 'peertube'; }
+    public static function name(): string { return 'PeerTube'; }
+    public static function color(): string { return '#f1680d'; }
+    public static function textLimit(): int { return 10000; }
+    public static function implemented(): bool { return true; }
+    public static function usesOAuth(): bool { return false; }
+
+    public static function mediaRules(): array
+    {
+        return ['max_media' => 1, 'video' => true, 'requires_media' => true, 'requires_video' => true];
+    }
+
+    public static function connectFields(): array
+    {
+        return [
+            'server' => ['label' => 'Server', 'type' => 'text', 'placeholder' => 'tilvids.com'],
+            'username' => ['label' => 'Username or email', 'type' => 'text', 'placeholder' => 'you'],
+            'password' => ['label' => 'Password', 'type' => 'password', 'placeholder' => ''],
+            'otp' => ['label' => 'Two-factor code (only if you turned it on)', 'type' => 'text', 'placeholder' => '123456'],
+        ];
+    }
+
+    public static function setupHint(): string
+    {
+        return 'No keys needed, and you don’t run a video server: sign up on any public PeerTube server (find one at joinpeertube.org) and connect with that account. KreateMix keeps a sign-in token, not your password. Each channel becomes its own account. The first line of a post becomes the video title (max 120 characters); the rest is the description.';
+    }
+
+    protected function authorizeEndpoint(): string { return ''; }
+    protected function tokenEndpoint(): string { return $this->base() . '/api/v1/users/token'; }
+    protected function scopes(): array { return []; }
+
+    // Client keys are per server, so they travel with the token instead of the Services page.
+    protected function clientId(): string { return (string) ($this->token()['client_id'] ?? $this->credentials['client_id'] ?? ''); }
+    protected function clientSecret(): string { return (string) ($this->token()['client_secret'] ?? $this->credentials['client_secret'] ?? ''); }
+
+    protected function base(): string
+    {
+        $server = $this->server ?: (string) ($this->accountData()['server'] ?? '');
+        return 'https://' . $server;
+    }
+
+    protected function normalizeToken(array $json, array $previous = []): array
+    {
+        $token = parent::normalizeToken($json, $previous);
+        if (isset($json['refresh_token_expires_in'])) {
+            $token['refresh_expires_at'] = time() + (int) $json['refresh_token_expires_in'];
+        }
+        return $token;
+    }
+
+    private static function cleanServer(string $raw): string
+    {
+        $raw = strtolower(trim($raw));
+        $raw = preg_replace('#^https?://#', '', $raw);
+        $raw = preg_replace('#^@?[^@/]+@#', '', $raw); // allow "you@server"
+        $host = explode('/', $raw)[0];
+        if (!preg_match('/^[a-z0-9.-]+\.[a-z]{2,}$/', $host)) {
+            throw new ProviderException('Enter the server’s domain, like tilvids.com.');
+        }
+        return $host;
+    }
+
+    public function connect(array $input, string $redirectUri): array
+    {
+        $this->server = self::cleanServer((string) ($input['server'] ?? ''));
+        $username = trim((string) ($input['username'] ?? ''));
+        $password = (string) ($input['password'] ?? '');
+        if ($username === '' || $password === '') {
+            throw new ProviderException('Enter your PeerTube username and password.');
+        }
+
+        $client = Http::get($this->base() . '/api/v1/oauth-clients/local');
+        if (!Http::ok($client) || empty($client['json']['client_id'])) {
+            throw new ProviderException("Couldn’t reach PeerTube on {$this->server}. Check the server name. (" . $this->errorMessage($client) . ')');
+        }
+        $keys = ['client_id' => $client['json']['client_id'], 'client_secret' => $client['json']['client_secret']];
+
+        $otp = preg_replace('/\s+/', '', (string) ($input['otp'] ?? ''));
+        $res = Http::post($this->tokenEndpoint(), [
+            'form' => $keys + ['grant_type' => 'password', 'username' => $username, 'password' => $password],
+            'headers' => $otp !== '' ? ['x-peertube-otp' => $otp] : [],
+        ]);
+        if (!Http::ok($res) || empty($res['json']['access_token'])) {
+            if (($res['headers']['x-peertube-otp'] ?? '') === 'required' && $otp === '') {
+                throw new ProviderException('This account uses two-factor sign-in. Enter the code from your authenticator app.');
+            }
+            throw new ProviderException('PeerTube sign-in failed: ' . $this->errorMessage($res));
+        }
+        $token = $this->normalizeToken($res['json']) + $keys;
+        $this->account = ['token' => $token];
+
+        $me = $this->api('GET', $this->base() . '/api/v1/users/me')['json'];
+        $acct = $me['account'] ?? [];
+        $channels = $me['videoChannels'] ?? [];
+        if (!$channels) {
+            throw new ProviderException('This PeerTube account has no channels. Create one on ' . $this->server . ' first.');
+        }
+        return array_map(fn($c) => [
+            'provider_id' => $this->server . ':' . $c['id'],
+            'name' => ($c['displayName'] ?? '') !== '' ? $c['displayName'] : $c['name'],
+            'username' => $c['name'] . '@' . $this->server,
+            'avatar' => $this->avatar($c) ?? $this->avatar($acct),
+            'token' => $token,
+            'data' => ['server' => $this->server, 'channel_id' => (int) $c['id'], 'channel' => $c['name'], 'account' => (string) ($acct['name'] ?? $me['username'] ?? '')],
+        ], $channels);
+    }
+
+    /** Largest avatar URL of an account or channel (PeerTube 4+ lists several sizes; older servers have one). */
+    private function avatar(array $actor): ?string
+    {
+        $list = $actor['avatars'] ?? (isset($actor['avatar']) ? [$actor['avatar']] : []);
+        usort($list, fn($a, $b) => ($b['width'] ?? 0) <=> ($a['width'] ?? 0));
+        $path = $list[0]['path'] ?? ($list[0]['fileUrl'] ?? null);
+        if (!$path) {
+            return null;
+        }
+        return str_starts_with($path, 'http') ? $path : $this->base() . $path;
+    }
+
+    public function publish(string $text, array $media): array
+    {
+        $videos = array_values(array_filter($media, [MediaTools::class, 'isVideo']));
+        if (!$videos) {
+            throw new ProviderException('PeerTube posts need a video.');
+        }
+        $v = $videos[0];
+        [$title, $description] = self::splitTitle($text, 120);
+        if (mb_strlen($title) < 3) {
+            $title = mb_substr(pathinfo($v['name'], PATHINFO_FILENAME), 0, 120) ?: 'Video';
+            $description = trim($text);
+        }
+        $title = str_pad($title, 3, '.');
+
+        // Multipart streams the file from disk, so large videos don't have to fit in memory.
+        $res = $this->api('POST', $this->base() . '/api/v1/videos/upload', [
+            'multipart' => [
+                'videofile' => new \CURLFile($v['path'], $v['mime'], $v['name']),
+                'channelId' => (string) ($this->accountData()['channel_id'] ?? ''),
+                'name' => $title,
+                'description' => mb_substr($description, 0, 10000),
+                'privacy' => '1', // public
+                'waitTranscoding' => 'true',
+            ],
+            'timeout' => 1800,
+        ]);
+        $video = $res['json']['video'] ?? [];
+        $id = (string) ($video['id'] ?? '');
+        if ($id === '') {
+            throw new ProviderException('PeerTube didn’t return the new video.');
+        }
+        $slug = $video['shortUUID'] ?? $video['uuid'] ?? $id;
+        return ['id' => $id, 'url' => $this->base() . '/w/' . $slug];
+    }
+
+    public function accountMetrics(): array
+    {
+        $c = $this->api('GET', $this->base() . '/api/v1/video-channels/' . rawurlencode((string) ($this->accountData()['channel'] ?? '')))['json'];
+        return isset($c['followersCount']) ? ['followers' => (int) $c['followersCount']] : [];
+    }
+
+    public function postMetrics(string $providerPostId): array
+    {
+        $v = $this->api('GET', $this->base() . '/api/v1/videos/' . rawurlencode($providerPostId))['json'];
+        $out = ['likes' => (int) ($v['likes'] ?? 0), 'impressions' => (int) ($v['views'] ?? 0)];
+        if (isset($v['comments'])) {
+            $out['replies'] = (int) $v['comments'];
+        }
+        return $out;
+    }
+
+    public static function supportsComments(): bool { return true; }
+
+    /** Top-level comments (thread starters) on a video. */
+    public function comments(string $providerPostId): array
+    {
+        $r = $this->api('GET', $this->base() . '/api/v1/videos/' . rawurlencode($providerPostId) . '/comment-threads', ['query' => ['count' => 100, 'sort' => '-createdAt']])['json'];
+        $data = $this->accountData();
+        $out = [];
+        foreach ($r['data'] ?? [] as $c) {
+            if (!empty($c['isDeleted'])) {
+                continue;
+            }
+            $a = $c['account'] ?? [];
+            $handle = ($a['name'] ?? '') . '@' . ($a['host'] ?? $data['server'] ?? '');
+            $out[] = [
+                'id' => (string) $c['id'],
+                'text' => trim(html_entity_decode(strip_tags(str_replace(['<br>', '<br />', '</p><p>'], "\n", (string) ($c['text'] ?? ''))), ENT_QUOTES | ENT_HTML5, 'UTF-8')),
+                'author_name' => ($a['displayName'] ?? '') ?: ($a['name'] ?? ''),
+                'author_handle' => $handle,
+                'author_avatar' => $this->avatar($a),
+                'created_at' => gmdate('Y-m-d H:i:s', strtotime($c['createdAt'] ?? 'now')),
+                'url' => $c['url'] ?? null,
+                'reply_ref' => '',
+                'own' => $handle === ($data['account'] ?? '') . '@' . ($data['server'] ?? ''),
+            ];
+        }
+        usort($out, fn($a, $b) => strcmp($a['created_at'], $b['created_at']));
+        return $out;
+    }
+
+    public function reply(array $item, string $text): array
+    {
+        $res = $this->api('POST', $this->base() . '/api/v1/videos/' . rawurlencode((string) $item['root_ref']) . '/comments/' . rawurlencode((string) $item['provider_item_id']), ['json' => ['text' => $text]]);
+        $c = $res['json']['comment'] ?? [];
+        return ['id' => (string) ($c['id'] ?? ''), 'url' => $c['url'] ?? null];
+    }
+
+    public static function supportsFirstComment(): bool { return true; }
+
+    public function firstComment(string $providerPostId, string $text): void
+    {
+        $this->api('POST', $this->base() . '/api/v1/videos/' . rawurlencode($providerPostId) . '/comment-threads', ['json' => ['text' => $text]]);
+    }
+}
+
+}
+
+namespace App\Providers {
+
 // ---- Providers/Pinterest.php ----
 use App\MediaTools;
 
@@ -10395,6 +10628,7 @@ final class Registry
         X::class,
         Mastodon::class,
         Pixelfed::class,
+        PeerTube::class,
         Bluesky::class,
         Facebook::class,
         Instagram::class,
@@ -14292,7 +14526,7 @@ $radius = ($theme['button'] ?? 'rounded') === 'square' ? '8px' : '999px';
     <?php if ($page['bio'] !== ''): ?><p class="bio"><?= e($page['bio']) ?></p><?php endif; ?>
     <?php if ($socials): ?>
         <nav class="socials" aria-label="Social profiles">
-            <?php foreach ($socials as $href => $a): $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in', 'youtube' => 'YT', 'threads' => '@', 'tiktok' => 'TT', 'pinterest' => 'P'][$a['provider']] ?? '•'; ?>
+            <?php foreach ($socials as $href => $a): $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'peertube' => 'PT', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in', 'youtube' => 'YT', 'threads' => '@', 'tiktok' => 'TT', 'pinterest' => 'P'][$a['provider']] ?? '•'; ?>
                 <a href="<?= e($href) ?>" target="_blank" rel="noopener me" title="<?= e(provider_meta($a['provider'])['name']) ?>" aria-label="<?= e(provider_meta($a['provider'])['name']) ?>"><?= e($abbr) ?></a>
             <?php endforeach; ?>
         </nav>
