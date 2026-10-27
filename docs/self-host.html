@@ -148,7 +148,7 @@ sha256sum -c &amp;&amp; sudo DB_ENGINE=MARIADB_11.4 bash install.sh</code></pre>
       <li>Go to <strong>Sites → Add Site → Create a PHP Site</strong>.</li>
       <li><strong>Application:</strong> choose <strong>Generic</strong>.</li>
       <li><strong>Domain Name:</strong> <code>social.yourdomain.com</code>.</li>
-      <li><strong>PHP Version:</strong> the newest offered (8.5 at the time of writing). KreateMix needs 8.1 or newer.</li>
+      <li><strong>PHP Version:</strong> 8.5. KreateMix needs PHP 8.5 or newer and shows a message instead of starting on older versions.</li>
       <li><strong>Site User:</strong> <code>kreatemix</code>. <strong>Site User Password:</strong> click the generate button and <strong>save this password</strong>. You'll use it to connect over SSH in step 9.</li>
       <li>Click <strong>Create</strong>.</li>
     </ol>
@@ -172,7 +172,7 @@ sha256sum -c &amp;&amp; sudo DB_ENGINE=MARIADB_11.4 bash install.sh</code></pre>
 rm -f index.html index.php
 curl -fsSLO https://raw.githubusercontent.com/kennethyork/KreateMix/main/index.php
 ls -l</code></pre>
-    <p>You should see <code>index.php</code>, owned by <code>kreatemix</code>. Check that PHP has everything KreateMix needs (change <code>8.5</code> to your version). You should see six names, including <code>pdo_sqlite</code>:</p>
+    <p>You should see <code>index.php</code>, owned by <code>kreatemix</code>. Check that PHP has everything KreateMix needs. You should see six names, including <code>pdo_sqlite</code>:</p>
     <pre><code>php8.5 -m | grep -iE '^(pdo_sqlite|curl|openssl|mbstring|fileinfo|gd)$'</code></pre>
     <div class="note"><p><strong>Prefer clicking to typing?</strong> Download <a href="https://github.com/kennethyork/KreateMix/raw/main/index.php">index.php</a> to your computer, then upload it with the site's <strong>File Manager</strong> tab in CloudPanel, or with an SFTP app such as FileZilla or WinSCP (host <code>YOUR_SERVER_IP</code>, port 22, the site user and password).</p></div>
 
@@ -202,7 +202,7 @@ ls -l</code></pre>
       <li>In CloudPanel, open the site, then the <strong>Cron Jobs</strong> tab, then <strong>Add Cron Job</strong>.</li>
       <li><strong>Name:</strong> <code>KreateMix scheduler</code></li>
       <li><strong>Pre-defined settings:</strong> <strong>Every Minute</strong> (all five fields become <code>*</code>).</li>
-      <li><strong>Command</strong> (change <code>8.5</code> if you picked another PHP version in step 7; Integrations → Scheduler shows the exact command for your server):
+      <li><strong>Command</strong> (Integrations → Scheduler shows the exact command for your server):
         <pre><code>/usr/bin/php8.5 /home/kreatemix/htdocs/social.yourdomain.com/index.php cron &gt;/dev/null 2&gt;&amp;1</code></pre>
       </li>
       <li>Click <strong>Add Cron Job</strong>.</li>

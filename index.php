@@ -24,6 +24,22 @@ use App\Auth;
 use App\Config;
 use App\Db;
 
+// KreateMix only runs on PHP 8.5 or newer, the release with the longest security support.
+if (PHP_VERSION_ID < 80500) {
+    $msg = 'KreateMix needs PHP 8.5 or newer. This server runs PHP ' . PHP_VERSION . '. '
+        . 'Change the PHP version in your hosting control panel (in CloudPanel: the site\'s Settings tab), then reload this page.';
+    if (PHP_SAPI === 'cli') {
+        fwrite(STDERR, $msg . "\n");
+        exit(1);
+    }
+    http_response_code(500);
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>KreateMix needs PHP 8.5</title>'
+        . '<body style="font:17px/1.6 system-ui,sans-serif;max-width:36em;margin:12vh auto;padding:0 20px;color:#17152b">'
+        . '<h1 style="font-size:26px">KreateMix needs PHP 8.5</h1><p>' . htmlspecialchars($msg) . '</p></body>';
+    exit;
+}
+
 function now(): string
 {
     return gmdate('Y-m-d H:i:s');
