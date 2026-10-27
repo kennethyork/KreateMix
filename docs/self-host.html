@@ -220,6 +220,8 @@ ls -l</code></pre>
       <tr><td>Upload Max Filesize</td><td><code>256M</code></td></tr>
     </table></div>
     <p>If large uploads still fail with "413 Request Entity Too Large", open the site's <strong>Vhost</strong> tab, find <code>client_max_body_size</code>, set it to <code>256M</code> and save.</p>
+    <h3>Long videos (YouTube, Vimeo, Dailymotion, PeerTube)</h3>
+    <p>For full-length videos, raise <strong>Post Max Size</strong> and <strong>Upload Max Filesize</strong> to the biggest file you'll post (for example <code>4G</code>), <strong>Max Execution Time</strong> to <code>3600</code>, and <code>client_max_body_size</code> in the Vhost to the same size. Then tell KreateMix: in <code>.ht.kreatemix-config.php</code> next to <code>index.php</code>, change <code>'max_upload_mb' =&gt; 200</code> to <code>'max_upload_mb' =&gt; 4096</code>. KreateMix sends videos to the networks straight from disk, so <strong>Memory Limit</strong> can stay at <code>256M</code>, and your server needs free disk space of about twice the video's size while it posts.</p>
 
     <h2 id="platforms">12. Connect your social networks</h2>
     <p>Each network needs a free developer app that you create on its website, apart from Mastodon, Pixelfed, PeerTube, Loops and Bluesky.</p>
@@ -237,6 +239,8 @@ ls -l</code></pre>
       <tr><td>Facebook, Instagram, Threads</td><td>A Meta developer app</td></tr>
       <tr><td>LinkedIn</td><td>A LinkedIn developer app</td></tr>
       <tr><td>YouTube, Google Business</td><td>A Google Cloud OAuth client</td></tr>
+      <tr><td>Vimeo</td><td>An app at <a href="https://developer.vimeo.com/apps">developer.vimeo.com</a> with upload access, which Vimeo approves on request</td></tr>
+      <tr><td>Dailymotion</td><td>A public API key from Dailymotion's Partner HQ</td></tr>
       <tr><td>X</td><td>An X developer app on an API plan with write access (paid)</td></tr>
       <tr><td>TikTok, Pinterest</td><td>A developer app on their sites. TikTok posts privately until your app passes its audit.</td></tr>
     </table></div>

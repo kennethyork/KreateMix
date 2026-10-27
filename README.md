@@ -21,7 +21,7 @@ Don't want to run a server? **KreateMix Cloud** is the hosted version, with a 7-
 - **Website analytics** — a cookieless tracking snippet: visitors, pages, referrers, UTM campaigns, devices, and how much traffic comes from social
 - **Hashtag tracker** — follow a hashtag on Mastodon, Bluesky, X and Instagram: posts, reach, top posts and the people using it
 - **Competitors** — track public accounts on X, Bluesky, Mastodon, Instagram and YouTube: followers, growth, posting frequency, average engagement
-- **Inbox** — comments on your posts from X, Mastodon, Pixelfed, PeerTube, Loops, Bluesky, Facebook, Instagram, Threads and YouTube, with replies sent from KreateMix
+- **Inbox** — comments on your posts from X, Mastodon, Pixelfed, PeerTube, Loops, Bluesky, Facebook, Instagram, Threads, YouTube and Vimeo, with replies sent from KreateMix
 - **Link in bio** — a public page per workspace with links, social icons, a recent-posts grid and click tracking
 - **Ads** — spend, impressions, clicks, CTR, CPC and conversions from Meta, Google and TikTok ad accounts
 - **AI writing** — write, rewrite, shorten, add hashtags or get variations. Bring your own [OpenRouter](https://openrouter.ai) key to use any major model; each workspace can use its own key. OpenAI, Anthropic and OpenAI-compatible servers (Ollama, LM Studio) work too
@@ -32,7 +32,7 @@ Don't want to run a server? **KreateMix Cloud** is the hosted version, with a 7-
 - **Installable app (PWA)** — install it on your phone or computer from the **Install** button in the menu (iPhone gets step-by-step instructions). Runs in its own window, shows unread comments on the app icon, has shortcuts to New post, Calendar and Inbox, and appears in your phone's share menu so you can share a link or text straight into a new post
 - **Push notifications** — failed posts, approvals, new comments
 - **Webhooks** — signed with HMAC-SHA256, retried with backoff
-- **Platforms** — X, Mastodon, Pixelfed, PeerTube, Loops, Bluesky, Facebook Pages, Instagram, LinkedIn, YouTube, Threads, TikTok, Pinterest, Google Business Profile
+- **Platforms** — X, Mastodon, Pixelfed, PeerTube, Loops, Bluesky, Facebook Pages, Instagram, LinkedIn, YouTube, Vimeo, Dailymotion, Threads, TikTok, Pinterest, Google Business Profile
 - **Works offline** — drafts autosave on your device, pages you've opened still load without a connection, and posts made offline send themselves when you're back
 - **Media cached on your device** — images and videos you've viewed are kept in the browser (IndexedDB, up to 200 MB, files up to 25 MB) so they load instantly and show offline. The server keeps the real copy, so scheduled posts still go out with the browser closed. Signing out clears the cache
 - Dark mode, mobile layout, encrypted tokens at rest
@@ -91,7 +91,7 @@ location ~ \.php$ {
 }
 ```
 
-Raise `upload_max_filesize` and `post_max_size` in `php.ini` if you post videos.
+Raise `upload_max_filesize` and `post_max_size` in `php.ini` if you post videos, and `max_upload_mb` in the settings file for long videos (for example 4096 for 4 GB).
 
 CSS, JavaScript, icons and uploaded media are served through `index.php?asset=…` and `index.php?file=…`, so server rules that answer `.css`, `.js` and image requests from disk (CloudPanel has one) don't get in the way.
 
@@ -153,7 +153,9 @@ Integrations → Scheduler shows when it last ran and how.
 | Instagram | Instagram app ID/secret | Professional accounts only. PNG/WebP are converted to JPEG automatically. Single videos post as Reels. |
 | Threads | Threads app ID/secret | Text, images, video and carousels. |
 | LinkedIn | Client ID/secret | Personal profile; company pages too if your app has the Community Management API. |
-| YouTube | Google OAuth client | First line of the post is the title. |
+| YouTube | Google OAuth client | First line of the post is the title. Long videos stream from disk, so file size isn't limited by memory. |
+| Vimeo | Vimeo app with upload access | Long-form video. First line is the title. Uploads stream and resume (tus). How much you can upload depends on the Vimeo plan. Comments come into the inbox. |
+| Dailymotion | Dailymotion public API key | Long-form video. Pick a category when connecting (every Dailymotion video needs one). First line is the title. |
 | TikTok | Client key/secret | Unaudited apps can only post privately. Photo posts need your domain verified with TikTok. |
 | Pinterest | App ID/secret | Each board is its own account. First line is the pin title; a link in the text becomes the pin link. |
 | Google Business Profile | Google OAuth client | Requires Google to grant API access. Each location is its own account. |

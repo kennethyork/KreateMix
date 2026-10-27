@@ -134,7 +134,7 @@ final class CloudController
         $details = [
             'domain' => mb_substr(trim((string) input('domain', '')), 0, 200),
             'hosting' => mb_substr(trim((string) input('hosting', '')), 0, 200),
-            'platforms' => array_values(array_intersect((array) input('platforms', []), ['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'pinterest', 'threads', 'google_business', 'bluesky', 'mastodon', 'pixelfed', 'peertube', 'loops'])),
+            'platforms' => array_values(array_intersect((array) input('platforms', []), ['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'pinterest', 'threads', 'google_business', 'bluesky', 'mastodon', 'pixelfed', 'peertube', 'loops', 'vimeo', 'dailymotion'])),
             'notes' => mb_substr(trim((string) input('notes', '')), 0, 4000),
         ];
         $order = Db::one('SELECT * FROM orders WHERE stripe_session_id = ?', [$sessionId]);

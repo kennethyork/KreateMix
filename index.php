@@ -430,7 +430,7 @@ function account_avatar(array $a, string $size = ''): string
 /** Small colored platform marker with a short abbreviation (no brand logos). */
 function provider_badge(string $key, string $class = 'pbadge'): string
 {
-    $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'peertube' => 'PT', 'loops' => 'L', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in',
+    $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'peertube' => 'PT', 'loops' => 'L', 'vimeo' => 'V', 'dailymotion' => 'D', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in',
         'youtube' => 'YT', 'threads' => 'Th', 'tiktok' => 'TT', 'pinterest' => 'P', 'google_business' => 'G', 'sandbox' => 'S'];
     $meta = provider_meta($key);
     return '<span class="' . e($class) . '" style="--pc: ' . e($meta['color']) . '" aria-hidden="true">' . e($abbr[$key] ?? strtoupper(substr($key, 0, 1))) . '</span>';
@@ -4127,6 +4127,8 @@ final class BioController
             'pixelfed' => str_contains($u, '@') ? 'https://' . explode('@', $u)[1] . '/' . explode('@', $u)[0] : null,
             'peertube' => str_contains($u, '@') ? 'https://' . explode('@', $u)[1] . '/c/' . explode('@', $u)[0] : null,
             'loops' => str_contains($u, '@') ? 'https://' . explode('@', $u)[1] . '/@' . explode('@', $u)[0] : null,
+            'vimeo' => ($data['link'] ?? '') ?: ($u ? "https://vimeo.com/$u" : null),
+            'dailymotion' => $u ? "https://www.dailymotion.com/$u" : null,
             'instagram' => $u ? "https://www.instagram.com/$u/" : null,
             'threads' => $u ? "https://www.threads.net/@$u" : null,
             'tiktok' => $u ? "https://www.tiktok.com/@$u" : null,
@@ -7817,7 +7819,35 @@ final class Http
             $port = $p['port'] ?? (strtolower($p['scheme']) === 'https' ? 443 : 80);
             curl_setopt($ch, CURLOPT_RESOLVE, [trim($p['host'], '[]') . ':' . $port . ':' . $options['resolve']]);
         }
-        if ($body !== null) {
+        if ($method === 'HEAD') {
+            curl_setopt($ch, CURLOPT_NOBODY, true);
+        }
+        $fh = null;
+        if (!empty($options['upload'])) {
+            // Stream a file (or part of one) as the body, so long videos never have to fit in memory.
+            $up = $options['upload'];
+            $fh = fopen($up['path'], 'rb');
+            if ($fh === false) {
+                throw new \RuntimeException('Couldn’t read the file to upload.');
+            }
+            $offset = (int) ($up['offset'] ?? 0);
+            $remaining = (int) ($up['length'] ?? (filesize($up['path']) - $offset));
+            fseek($fh, $offset);
+            curl_setopt_array($ch, [
+                CURLOPT_UPLOAD => true,
+                CURLOPT_CUSTOMREQUEST => $method,
+                CURLOPT_INFILESIZE_LARGE => $remaining,
+                CURLOPT_READFUNCTION => function ($ch, $fd, $len) use ($fh, &$remaining) {
+                    if ($remaining <= 0) {
+                        return '';
+                    }
+                    $data = fread($fh, min($len, $remaining));
+                    $remaining -= strlen((string) $data);
+                    return $data === false ? '' : $data;
+                },
+            ]);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, array_merge($lines, ['Expect:']));
+        } elseif ($body !== null) {
             curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
         } elseif (in_array($method, ['POST', 'PUT', 'PATCH'], true)) {
             // Send an explicit empty body so servers get Content-Length: 0.
@@ -7825,6 +7855,9 @@ final class Http
         }
 
         $raw = curl_exec($ch);
+        if ($fh) {
+            fclose($fh);
+        }
         if ($raw === false) {
             $err = curl_errno($ch) === CURLE_ABORTED_BY_CALLBACK ? 'the response is too large' : curl_error($ch);
             unset($ch);
@@ -11030,6 +11063,278 @@ final class Loops extends Mastodon
 
 namespace App\Providers {
 
+// ---- Providers/Vimeo.php ----
+use App\Http;
+use App\MediaTools;
+
+/** Vimeo: long-form video. Uploads stream with the tus protocol, so file size is only limited by the Vimeo plan. */
+final class Vimeo extends OAuth2Provider
+{
+    private const API = 'https://api.vimeo.com';
+    private const ACCEPT = 'application/vnd.vimeo.*+json;version=3.4';
+
+    public static function key(): string { return 'vimeo'; }
+    public static function name(): string { return 'Vimeo'; }
+    public static function color(): string { return '#1ab7ea'; }
+    public static function textLimit(): int { return 5000; }
+    public static function implemented(): bool { return true; }
+
+    public static function mediaRules(): array
+    {
+        return ['max_media' => 1, 'video' => true, 'requires_media' => true, 'requires_video' => true];
+    }
+
+    public static function credentialFields(): array
+    {
+        return ['client_id' => 'Client identifier', 'client_secret' => 'Client secret'];
+    }
+
+    public static function setupHint(): string
+    {
+        return 'At developer.vimeo.com/apps create an app, request upload access (Vimeo approves it, usually within a few days), and add the callback URL below. The first line of a post becomes the video title (max 128 characters); the rest is the description. How big and how many videos you can upload depends on the Vimeo plan.';
+    }
+
+    protected function authorizeEndpoint(): string { return self::API . '/oauth/authorize'; }
+    protected function tokenEndpoint(): string { return self::API . '/oauth/access_token'; }
+    protected function scopes(): array { return ['public', 'private', 'upload', 'edit', 'interact', 'stats']; }
+    protected function basicAuth(): bool { return true; }
+
+    protected function api(string $method, string $url, array $options = []): array
+    {
+        $options['headers'] = ($options['headers'] ?? []) + ['Accept' => self::ACCEPT];
+        return parent::api($method, $url, $options);
+    }
+
+    public function connect(array $input, string $redirectUri): array
+    {
+        $token = $this->exchangeCode($input, $redirectUri);
+        $this->account = ['token' => $token];
+        $me = $this->api('GET', self::API . '/me', ['query' => ['fields' => 'uri,name,link,pictures.base_link']])['json'];
+        $id = basename((string) ($me['uri'] ?? ''));
+        if ($id === '') {
+            throw new ProviderException('Vimeo didn’t return your account.');
+        }
+        return [[
+            'provider_id' => $id,
+            'name' => (string) ($me['name'] ?? 'Vimeo'),
+            'username' => basename((string) ($me['link'] ?? '')) ?: $id,
+            'avatar' => isset($me['pictures']['base_link']) ? $me['pictures']['base_link'] . '_200x200' : null,
+            'token' => $token,
+            'data' => ['link' => (string) ($me['link'] ?? '')],
+        ]];
+    }
+
+    public function publish(string $text, array $media): array
+    {
+        $videos = array_values(array_filter($media, [MediaTools::class, 'isVideo']));
+        if (!$videos) {
+            throw new ProviderException('Vimeo posts need a video.');
+        }
+        $v = $videos[0];
+        $size = (int) (filesize($v['path']) ?: $v['size']);
+        [$title, $description] = self::splitTitle($text, 128);
+        $video = $this->api('POST', self::API . '/me/videos', ['json' => [
+            'upload' => ['approach' => 'tus', 'size' => $size],
+            'name' => $title !== '' ? $title : pathinfo($v['name'], PATHINFO_FILENAME),
+            'description' => $description,
+            'privacy' => ['view' => 'anybody'],
+        ]])['json'];
+        $link = (string) ($video['upload']['upload_link'] ?? '');
+        if ($link === '') {
+            throw new ProviderException('Vimeo didn’t accept the upload. Check that your app has upload access and your plan has room.');
+        }
+        // tus: send the file, then resume from wherever Vimeo says it got to (up to a few times).
+        $offset = 0;
+        for ($try = 0; $try < 5 && $offset < $size; $try++) {
+            try {
+                $res = Http::request('PATCH', $link, [
+                    'upload' => ['path' => $v['path'], 'offset' => $offset, 'length' => $size - $offset],
+                    'headers' => ['Tus-Resumable' => '1.0.0', 'Upload-Offset' => (string) $offset, 'Content-Type' => 'application/offset+octet-stream', 'Accept' => self::ACCEPT],
+                    'timeout' => 0,
+                ]);
+            } catch (\RuntimeException) {
+                $res = null;
+            }
+            $head = Http::request('HEAD', $link, ['headers' => ['Tus-Resumable' => '1.0.0', 'Accept' => self::ACCEPT], 'timeout' => 30]);
+            $offset = (int) ($head['headers']['upload-offset'] ?? $res['headers']['upload-offset'] ?? $offset);
+        }
+        if ($offset < $size) {
+            throw new ProviderException("Vimeo only received $offset of $size bytes. Try again.");
+        }
+        $id = basename((string) ($video['uri'] ?? ''));
+        return ['id' => $id, 'url' => $video['link'] ?? ('https://vimeo.com/' . $id)];
+    }
+
+    public function accountMetrics(): array
+    {
+        $me = $this->api('GET', self::API . '/me', ['query' => ['fields' => 'metadata.connections.followers.total']])['json'];
+        $n = $me['metadata']['connections']['followers']['total'] ?? null;
+        return $n !== null ? ['followers' => (int) $n] : [];
+    }
+
+    public function postMetrics(string $providerPostId): array
+    {
+        $v = $this->api('GET', self::API . '/videos/' . rawurlencode($providerPostId), ['query' => ['fields' => 'stats.plays,metadata.connections.likes.total,metadata.connections.comments.total']])['json'];
+        $c = $v['metadata']['connections'] ?? [];
+        return ['impressions' => (int) ($v['stats']['plays'] ?? 0), 'likes' => (int) ($c['likes']['total'] ?? 0), 'replies' => (int) ($c['comments']['total'] ?? 0)];
+    }
+
+    public static function supportsComments(): bool { return true; }
+
+    public function comments(string $providerPostId): array
+    {
+        $r = $this->api('GET', self::API . '/videos/' . rawurlencode($providerPostId) . '/comments', ['query' => ['per_page' => 100]])['json'];
+        $me = (string) ($this->account['provider_id'] ?? '');
+        $out = [];
+        foreach ($r['data'] ?? [] as $c) {
+            $u = $c['user'] ?? [];
+            $out[] = [
+                'id' => basename((string) ($c['uri'] ?? '')),
+                'text' => trim((string) ($c['text'] ?? '')),
+                'author_name' => (string) ($u['name'] ?? ''),
+                'author_handle' => basename((string) ($u['link'] ?? '')),
+                'author_avatar' => isset($u['pictures']['base_link']) ? $u['pictures']['base_link'] . '_100x100' : null,
+                'created_at' => gmdate('Y-m-d H:i:s', strtotime($c['created_on'] ?? 'now')),
+                'url' => $c['link'] ?? null,
+                'reply_ref' => '',
+                'own' => basename((string) ($u['uri'] ?? '')) === $me,
+            ];
+        }
+        usort($out, fn($a, $b) => strcmp($a['created_at'], $b['created_at']));
+        return $out;
+    }
+
+    public function reply(array $item, string $text): array
+    {
+        $r = $this->api('POST', self::API . '/videos/' . rawurlencode((string) $item['root_ref']) . '/comments/' . rawurlencode((string) $item['provider_item_id']) . '/replies', ['json' => ['text' => $text]])['json'];
+        return ['id' => basename((string) ($r['uri'] ?? '')), 'url' => $r['link'] ?? null];
+    }
+}
+
+}
+
+namespace App\Providers {
+
+// ---- Providers/Dailymotion.php ----
+use App\Http;
+use App\MediaTools;
+
+/** Dailymotion: long-form video, through its public API (sign-in with an API key from Dailymotion's Partner HQ). */
+final class Dailymotion extends OAuth2Provider
+{
+    private const API = 'https://api.dailymotion.com';
+    /** Dailymotion's categories ("channels"); every video needs one. */
+    public const CATEGORIES = ['animals', 'auto', 'creation', 'fun', 'kids', 'lifestyle', 'music', 'news', 'people', 'school', 'shortfilms', 'sport', 'tech', 'travel', 'tv', 'videogames'];
+
+    public static function key(): string { return 'dailymotion'; }
+    public static function name(): string { return 'Dailymotion'; }
+    public static function color(): string { return '#0066dc'; }
+    public static function textLimit(): int { return 3000; }
+    public static function implemented(): bool { return true; }
+
+    public static function mediaRules(): array
+    {
+        return ['max_media' => 1, 'video' => true, 'requires_media' => true, 'requires_video' => true];
+    }
+
+    public static function credentialFields(): array
+    {
+        return ['client_id' => 'API key', 'client_secret' => 'API secret'];
+    }
+
+    public static function connectFields(): array
+    {
+        return ['category' => ['label' => 'Category for your videos (' . implode(', ', self::CATEGORIES) . ')', 'type' => 'text', 'placeholder' => 'lifestyle']];
+    }
+
+    public static function setupHint(): string
+    {
+        return 'In Dailymotion’s Partner HQ (or Studio) create a public API key, and add the callback URL below as its redirect URL. The first line of a post becomes the video title; the rest is the description. Every video goes into the category picked when the account is connected.';
+    }
+
+    protected function authorizeEndpoint(): string { return 'https://www.dailymotion.com/oauth/authorize'; }
+    protected function tokenEndpoint(): string { return self::API . '/oauth/token'; }
+    protected function scopes(): array { return ['manage_videos', 'userinfo']; }
+
+    public function authUrl(string $redirectUri, string $state, array $form = []): string
+    {
+        $category = strtolower(trim((string) ($form['category'] ?? ''))) ?: 'lifestyle';
+        if (!in_array($category, self::CATEGORIES, true)) {
+            throw new ProviderException('Pick one of these categories: ' . implode(', ', self::CATEGORIES) . '.');
+        }
+        $this->stash['category'] = $category;
+        return parent::authUrl($redirectUri, $state, $form);
+    }
+
+    public function connect(array $input, string $redirectUri): array
+    {
+        $token = $this->exchangeCode($input, $redirectUri);
+        $this->account = ['token' => $token];
+        $me = $this->api('GET', self::API . '/me', ['query' => ['fields' => 'id,screenname,username,avatar_240_url']])['json'];
+        if (empty($me['id'])) {
+            throw new ProviderException('Dailymotion didn’t return your account.');
+        }
+        return [[
+            'provider_id' => (string) $me['id'],
+            'name' => (string) (($me['screenname'] ?? '') ?: ($me['username'] ?? 'Dailymotion')),
+            'username' => (string) ($me['username'] ?? ''),
+            'avatar' => $me['avatar_240_url'] ?? null,
+            'token' => $token,
+            'data' => ['category' => (string) ($this->stash['category'] ?? 'lifestyle')],
+        ]];
+    }
+
+    public function publish(string $text, array $media): array
+    {
+        $videos = array_values(array_filter($media, [MediaTools::class, 'isVideo']));
+        if (!$videos) {
+            throw new ProviderException('Dailymotion posts need a video.');
+        }
+        $v = $videos[0];
+        $uploadUrl = (string) ($this->api('GET', self::API . '/file/upload')['json']['upload_url'] ?? '');
+        if ($uploadUrl === '') {
+            throw new ProviderException('Dailymotion didn’t return an upload address.');
+        }
+        // Multipart streams the file from disk.
+        $file = Http::post($uploadUrl, ['multipart' => ['file' => new \CURLFile($v['path'], $v['mime'], $v['name'])], 'timeout' => 0]);
+        $fileUrl = (string) ($file['json']['url'] ?? '');
+        if (!Http::ok($file) || $fileUrl === '') {
+            throw new ProviderException('Dailymotion didn’t accept the file: ' . $this->errorMessage($file));
+        }
+        [$title, $description] = self::splitTitle($text, 255);
+        $video = $this->api('POST', self::API . '/me/videos', ['form' => [
+            'url' => $fileUrl,
+            'title' => $title !== '' ? $title : pathinfo($v['name'], PATHINFO_FILENAME),
+            'description' => $description,
+            'channel' => (string) ($this->accountData()['category'] ?? 'lifestyle'),
+            'published' => 'true',
+            'private' => 'false',
+            'is_created_for_kids' => 'false',
+        ]])['json'];
+        $id = (string) ($video['id'] ?? '');
+        if ($id === '') {
+            throw new ProviderException('Dailymotion didn’t return the new video.');
+        }
+        return ['id' => $id, 'url' => 'https://www.dailymotion.com/video/' . $id];
+    }
+
+    public function accountMetrics(): array
+    {
+        $me = $this->api('GET', self::API . '/me', ['query' => ['fields' => 'followers_total,views_total']])['json'];
+        return isset($me['followers_total']) ? ['followers' => (int) $me['followers_total'], 'views' => (int) ($me['views_total'] ?? 0)] : [];
+    }
+
+    public function postMetrics(string $providerPostId): array
+    {
+        $v = $this->api('GET', self::API . '/video/' . rawurlencode($providerPostId), ['query' => ['fields' => 'views_total,likes_total']])['json'];
+        return ['impressions' => (int) ($v['views_total'] ?? 0), 'likes' => (int) ($v['likes_total'] ?? 0)];
+    }
+}
+
+}
+
+namespace App\Providers {
+
 // ---- Providers/Pinterest.php ----
 use App\MediaTools;
 
@@ -11161,6 +11466,8 @@ final class Registry
         Instagram::class,
         LinkedIn::class,
         YouTube::class,
+        Vimeo::class,
+        Dailymotion::class,
         Threads::class,
         TikTok::class,
         Pinterest::class,
@@ -12049,9 +12356,9 @@ final class YouTube extends OAuth2Provider
             throw new ProviderException('YouTube didn’t return an upload URL.');
         }
         $res = $this->api('PUT', $uploadUrl, [
-            'body' => file_get_contents($v['path']),
+            'upload' => ['path' => $v['path']],
             'headers' => ['Content-Type' => $v['mime']],
-            'timeout' => 1800,
+            'timeout' => 0, // long videos can take hours
         ]);
         $id = (string) ($res['json']['id'] ?? '');
         return ['id' => $id, 'url' => $id ? 'https://www.youtube.com/watch?v=' . $id : null];
@@ -15287,7 +15594,7 @@ $radius = ($theme['button'] ?? 'rounded') === 'square' ? '8px' : '999px';
     <?php if ($page['bio'] !== ''): ?><p class="bio"><?= e($page['bio']) ?></p><?php endif; ?>
     <?php if ($socials): ?>
         <nav class="socials" aria-label="Social profiles">
-            <?php foreach ($socials as $href => $a): $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'peertube' => 'PT', 'loops' => 'L', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in', 'youtube' => 'YT', 'threads' => '@', 'tiktok' => 'TT', 'pinterest' => 'P'][$a['provider']] ?? '•'; ?>
+            <?php foreach ($socials as $href => $a): $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'peertube' => 'PT', 'loops' => 'L', 'vimeo' => 'V', 'dailymotion' => 'D', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in', 'youtube' => 'YT', 'threads' => '@', 'tiktok' => 'TT', 'pinterest' => 'P'][$a['provider']] ?? '•'; ?>
                 <a href="<?= e($href) ?>" target="_blank" rel="noopener me" title="<?= e(provider_meta($a['provider'])['name']) ?>" aria-label="<?= e(provider_meta($a['provider'])['name']) ?>"><?= e($abbr) ?></a>
             <?php endforeach; ?>
         </nav>
@@ -20249,7 +20556,7 @@ MC_ASSET_1],
             return String(name || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
         }
         function abbr(key) {
-            return { x: 'X', mastodon: 'M', pixelfed: 'Px', peertube: 'PT', loops: 'L', bluesky: 'B', facebook: 'f', instagram: 'IG', linkedin: 'in', youtube: 'YT', threads: 'Th', tiktok: 'TT', pinterest: 'P', google_business: 'G', sandbox: 'S' }[key] || key[0].toUpperCase();
+            return { x: 'X', mastodon: 'M', pixelfed: 'Px', peertube: 'PT', loops: 'L', vimeo: 'V', dailymotion: 'D', bluesky: 'B', facebook: 'f', instagram: 'IG', linkedin: 'in', youtube: 'YT', threads: 'Th', tiktok: 'TT', pinterest: 'P', google_business: 'G', sandbox: 'S' }[key] || key[0].toUpperCase();
         }
 
         form.addEventListener('input', update);
