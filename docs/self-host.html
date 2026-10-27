@@ -197,7 +197,7 @@ ls -l</code></pre>
       </li>
       <li>Click <strong>Add Cron Job</strong>.</li>
     </ol>
-    <p>To check it works, schedule a test post for two minutes from now. If you only want to test without posting for real, use Mastodon or Bluesky, which need no API keys.</p>
+    <p>To check it works, schedule a test post for two minutes from now. If you only want to test without posting for real, use Mastodon, Pixelfed or Bluesky, which need no API keys.</p>
 
     <h2 id="php">11. PHP settings for video uploads</h2>
     <p>PHP's default upload limit is too small for video. Open the site's <strong>Settings</strong> tab, scroll to <strong>PHP Settings</strong>, set these and click <strong>Save</strong>:</p>
@@ -211,7 +211,7 @@ ls -l</code></pre>
     <p>If large uploads still fail with "413 Request Entity Too Large", open the site's <strong>Vhost</strong> tab, find <code>client_max_body_size</code>, set it to <code>256M</code> and save.</p>
 
     <h2 id="platforms">12. Connect your social networks</h2>
-    <p>Each network needs a free developer app that you create on its website, apart from Mastodon and Bluesky.</p>
+    <p>Each network needs a free developer app that you create on its website, apart from Mastodon, Pixelfed, PeerTube and Bluesky.</p>
     <ol>
       <li>In KreateMix, open <strong>Platform API keys</strong> (instance admins only).</li>
       <li>Each network's panel shows a <strong>callback URL</strong> starting with <code>https://social.yourdomain.com/</code>. Copy it exactly into the developer app you create on that network's site.</li>
@@ -220,7 +220,8 @@ ls -l</code></pre>
     </ol>
     <table>
       <tr><th>Network</th><th>What you need</th></tr>
-      <tr><td>Mastodon, Bluesky</td><td>Nothing. Connect straight away (Bluesky uses an app password).</td></tr>
+      <tr><td>Mastodon, Pixelfed, Bluesky</td><td>Nothing. Connect straight away (Bluesky uses an app password).</td></tr>
+      <tr><td>PeerTube</td><td>Just an account on any public PeerTube server (find one at <a href="https://joinpeertube.org/browse-content">joinpeertube.org</a>). You don't run a video server yourself.</td></tr>
       <tr><td>Facebook, Instagram, Threads</td><td>A Meta developer app</td></tr>
       <tr><td>LinkedIn</td><td>A LinkedIn developer app</td></tr>
       <tr><td>YouTube, Google Business</td><td>A Google Cloud OAuth client</td></tr>
