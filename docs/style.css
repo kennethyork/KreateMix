@@ -87,7 +87,7 @@ ol.steps li { margin-bottom: 8px; }
 .guide { display: grid; grid-template-columns: 240px 1fr; gap: 48px; padding: 40px 20px 80px; }
 .toc { position: sticky; top: 84px; align-self: start; font-size: 14px; max-height: calc(100vh - 100px); overflow: auto; }
 .toc strong { display: block; margin-bottom: 8px; }
-.toc ol { padding-left: 18px; margin: 0; }
+.toc ol { padding-left: 26px; margin: 0; }
 .toc li { margin: 4px 0; }
 .toc a { color: var(--muted); text-decoration: none; }
 .toc a:hover { color: var(--accent); }

@@ -36,7 +36,7 @@
       <li><a href="#site">Create the site</a></li>
       <li><a href="#ssl">Turn on HTTPS</a></li>
       <li><a href="#install">Install KreateMix</a></li>
-      <li><a href="#cron">Add the cron job</a></li>
+      <li><a href="#cron">Check the scheduler</a></li>
       <li><a href="#php">PHP settings for video</a></li>
       <li><a href="#platforms">Connect your networks</a></li>
       <li><a href="#backups">Backups</a></li>
@@ -186,17 +186,25 @@ ls -l</code></pre>
       <tr><td><code>.ht.kreatemix-….sqlite</code></td><td><code>~/htdocs/</code>, one folder up, out of the web server's reach</td><td>The database: posts, accounts, analytics and uploaded media</td></tr>
     </table>
 
-    <h2 id="cron">10. Add the cron job</h2>
-    <p>Without this, scheduled posts won't be published. The cron job wakes KreateMix every minute to publish posts that are due, refresh analytics and fetch comments.</p>
+    <h2 id="cron">10. Check the scheduler</h2>
+    <p>The scheduler wakes KreateMix every minute to publish posts that are due, refresh analytics and fetch comments. Without it, scheduled posts won't go out.</p>
+    <p>You usually don't need to do anything: when you created your admin account, KreateMix added its own cron job to the site user's crontab. As a backup, it also runs the scheduler right after pages load while you're using the site. Check it under <strong>Integrations → Scheduler</strong>:</p>
+    <ul>
+      <li><strong>Running</strong>: you're done. Skip to step 11.</li>
+      <li><strong>Not running</strong>, with a <strong>Set it up for me</strong> button: click it, then check again in a minute.</li>
+      <li><strong>Not running</strong>, with a cron command shown instead: your server doesn't let KreateMix edit its own cron jobs. Add it in CloudPanel as below.</li>
+    </ul>
+    <h3>Add the cron job by hand</h3>
     <ol>
       <li>In CloudPanel, open the site, then the <strong>Cron Jobs</strong> tab, then <strong>Add Cron Job</strong>.</li>
       <li><strong>Name:</strong> <code>KreateMix scheduler</code></li>
       <li><strong>Pre-defined settings:</strong> <strong>Every Minute</strong> (all five fields become <code>*</code>).</li>
-      <li><strong>Command</strong> (change <code>8.4</code> if you picked another PHP version in step 7):
+      <li><strong>Command</strong> (change <code>8.4</code> if you picked another PHP version in step 7; Integrations → Scheduler shows the exact command for your server):
         <pre><code>/usr/bin/php8.4 /home/kreatemix/htdocs/social.yourdomain.com/index.php cron &gt;/dev/null 2&gt;&amp;1</code></pre>
       </li>
       <li>Click <strong>Add Cron Job</strong>.</li>
     </ol>
+    <p>If you later add or edit other cron jobs in CloudPanel, it may rewrite the list and drop the one KreateMix added. KreateMix notices and puts it back the next time you open the dashboard, or you can add it by hand as above.</p>
     <p>To check it works, schedule a test post for two minutes from now. If you only want to test without posting for real, use Mastodon, Pixelfed or Bluesky, which need no API keys.</p>
 
     <h2 id="php">11. PHP settings for video uploads</h2>
@@ -270,7 +278,7 @@ systemctl restart ssh</code></pre>
       <tr><th>Problem</th><th>Fix</th></tr>
       <tr>
         <td>Scheduled posts stay "scheduled" and never go out</td>
-        <td>The cron job isn't running. Check the command in step 10: the PHP version must match the site's, and the path must match your domain. Test it by connecting as the site user and running the command without <code>&gt;/dev/null 2&gt;&amp;1</code> to see any errors.</td>
+        <td>The scheduler isn't running. Open <strong>Integrations → Scheduler</strong>: it shows when it last ran and offers <strong>Set it up for me</strong>. If you added the cron job by hand (step 10), check that its PHP version matches the site's and the path matches your domain. Test it by connecting as the site user and running the command without <code>&gt;/dev/null 2&gt;&amp;1</code> to see any errors.</td>
       </tr>
       <tr>
         <td>"Redirect URI mismatch" or similar when connecting an account</td>

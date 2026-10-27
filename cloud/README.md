@@ -33,10 +33,7 @@ Changes to the app itself go in the root `index.php`; rebuild afterwards and Clo
 
 1. Build (see above) and upload the result as `index.php` to your web root. On CloudPanel: create a PHP site and put it in `htdocs/your-domain`.
 2. Open the domain and create your admin account. Your sales page goes live at the same address for visitors who aren't signed in.
-3. Add the scheduler to cron (CloudPanel: the site's **Cron Jobs** tab), every minute:
-   ```
-   php /home/<site-user>/htdocs/<your-domain>/index.php cron
-   ```
+3. The scheduler sets itself up: creating the admin account adds its cron job, and a backup runs it after page views. Check **Integrations → Scheduler**; if it isn't running, add `php /home/<site-user>/htdocs/<your-domain>/index.php cron` under the site's **Cron Jobs** tab, every minute. The scheduler also sends trial reminders, so it matters here.
 4. Under **Platform API keys**, add your developer apps for each network (see below).
 5. Under **Hosted service**, set your business name and support email, connect Stripe and review the plans.
 6. Under **Legal pages**, review the terms, privacy policy and data deletion page.

@@ -327,7 +327,7 @@ function mc_view_cloud_landing(array $__vars): void
 ?><?php
 $trial = (int) $cloud['trial_days'];
 $signup = !empty($cloud['signup_open']);
-$networks = ['Instagram', 'Facebook', 'X', 'LinkedIn', 'TikTok', 'YouTube', 'Threads', 'Pinterest', 'Bluesky', 'Mastodon', 'Google Business'];
+$networks = ['Instagram', 'Facebook', 'X', 'LinkedIn', 'TikTok', 'YouTube', 'Threads', 'Pinterest', 'Bluesky', 'Mastodon', 'Pixelfed', 'PeerTube', 'Google Business'];
 $features = [
     ['calendar', 'Plan and schedule', 'One post to every network with per-network text, a drag-and-drop calendar, autolists that recycle your best posts, and bulk upload from a spreadsheet.'],
     ['chart', 'Analytics that explain', 'Followers, reach and engagement for every account, your best times to post, and which formats and hashtags work.'],
