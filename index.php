@@ -2256,7 +2256,7 @@ final class ChartImage
     {
         ob_start();
         imagepng($im);
-        imagedestroy($im);
+        unset($im);
         return (string) ob_get_clean();
     }
 }
@@ -7520,11 +7520,11 @@ final class Http
         $raw = curl_exec($ch);
         if ($raw === false) {
             $err = curl_error($ch);
-            curl_close($ch);
+            unset($ch);
             throw new \RuntimeException("Request to " . parse_url($url, PHP_URL_HOST) . " failed: $err");
         }
         $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        curl_close($ch);
+        unset($ch);
 
         $json = json_decode($raw, true);
         return ['status' => $status, 'body' => $raw, 'json' => is_array($json) ? $json : [], 'headers' => $respHeaders];
@@ -7964,14 +7964,14 @@ final class MediaTools
                 ob_start();
                 imagejpeg($dst, null, $quality);
                 $data = ob_get_clean();
-                imagedestroy($dst);
+                unset($dst);
                 if ($maxBytes === null || strlen($data) <= $maxBytes) {
                     break;
                 }
                 $quality = max(60, $quality - 8);
                 $scale *= 0.85;
             }
-            imagedestroy($src);
+            unset($src);
             Blob::putString($key, $data);
         }
         $abs = Blob::file($key);

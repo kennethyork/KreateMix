@@ -39,7 +39,7 @@ Don't want to run a server? **KreateMix Cloud** is the hosted version, with a 7-
 
 ## Requirements
 
-- PHP 8.1+ with `pdo_sqlite`, `curl`, `openssl`, `mbstring`, `fileinfo` (and `gd` for image sizes)
+- PHP 8.1 to 8.5 with `pdo_sqlite`, `curl`, `openssl`, `mbstring`, `fileinfo` (and `gd` for image sizes)
 - Any web server that runs PHP (Apache, Nginx + PHP-FPM, Caddy, shared hosting)
 - A cron job, or an external service that can hit a URL every minute
 
@@ -87,7 +87,7 @@ location ~ \.php$ {
     try_files $uri =404;
     include fastcgi_params;
     fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-    fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+    fastcgi_pass unix:/run/php/php8.5-fpm.sock;
 }
 ```
 
