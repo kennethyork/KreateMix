@@ -83,6 +83,12 @@ function base_path(): string
  * .htaccess), 'index' when it doesn't and pages must be addressed as /index.php/path. Checked once by
  * asking the server for a made-up path, then remembered.
  */
+/** Proves the clean-URL check reached this install, not some other server. */
+function url_check_token(): string
+{
+    return substr(hash_hmac('sha256', 'url-check', (string) Config::get('app_key')), 0, 16);
+}
+
 function url_mode(string $dir): string
 {
     static $mode = null;
@@ -99,9 +105,17 @@ function url_mode(string $dir): string
     $host = $_SERVER['HTTP_HOST'] ?? '';
     if ($host !== '') {
         try {
-            $r = App\Http::get(($https ? 'https' : 'http') . '://' . $host . $dir . '/mc-url-check', ['timeout' => 4]);
+            // Ask this same server (pinned to its own address, so a forged Host header can't send the check elsewhere).
+            $opts = ['timeout' => 4, 'allow_private' => true, 'no_redirects' => true];
+            if (!empty($_SERVER['SERVER_ADDR'])) {
+                $opts['resolve'] = str_contains($_SERVER['SERVER_ADDR'], ':') ? '[' . $_SERVER['SERVER_ADDR'] . ']' : $_SERVER['SERVER_ADDR'];
+            }
+            $r = App\Http::get(($https ? 'https' : 'http') . '://' . $host . $dir . '/mc-url-check', $opts);
+            $ours = str_contains((string) $r['body'], 'kreatemix-url-ok:' . url_check_token());
             if ($r['status'] === 404 && !str_contains((string) $r['body'], 'kreatemix-url-ok')) {
                 $mode = 'index';
+            } elseif (!$ours) {
+                return $mode; // some other server answered: use clean URLs for now, but don't remember it
             }
         } catch (Throwable) {
             // Can't reach ourselves (firewall, hairpin NAT): keep clean URLs, the usual case.
@@ -163,6 +177,28 @@ function entry_url(array $query, bool $absolute = false): string
 function asset(string $path): string
 {
     return entry_url(['asset' => ltrim($path, '/'), 'v' => App\Assets::version()]);
+}
+
+/** A same-site path to send the user back to, or the fallback. Blocks //host, /\host and control characters. */
+/** A spreadsheet cell that Excel and Sheets won't run as a formula. */
+function csv_cell(mixed $v): mixed
+{
+    return is_string($v) && $v !== '' && strpbrk($v[0], "=+-@\t\r") !== false ? "'" . $v : $v;
+}
+
+/** Only http(s) links, for URLs that come from other servers. */
+function safe_href(?string $u): string
+{
+    return is_string($u) && preg_match('#^https?://#i', $u) ? $u : '#';
+}
+
+function safe_path(mixed $path, string $fallback = '/'): string
+{
+    $path = is_string($path) ? $path : '';
+    if ($path === '' || $path[0] !== '/' || preg_match('#^/[/\\\\]|\\\\|[\x00-\x1f\x7f]#', $path)) {
+        return $fallback;
+    }
+    return $path;
 }
 
 function redirect(string $path, array $query = [], string $fragment = ''): never
@@ -466,7 +502,45 @@ function authorization_header(): string
 /** The visitor's IP address (Cloudflare-aware). Used only for rate limits. */
 function client_ip(): string
 {
-    return (string) ($_SERVER['HTTP_CF_CONNECTING_IP'] ?? $_SERVER['REMOTE_ADDR'] ?? '');
+    $remote = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+    // Trust Cloudflare's header only when the request really comes from Cloudflare; anyone else could fake it.
+    $cf = (string) ($_SERVER['HTTP_CF_CONNECTING_IP'] ?? '');
+    if ($cf !== '' && filter_var($cf, FILTER_VALIDATE_IP) && ip_in_ranges($remote, CLOUDFLARE_RANGES)) {
+        return $cf;
+    }
+    return $remote;
+}
+
+/** Cloudflare's published edge ranges (https://www.cloudflare.com/ips/). */
+const CLOUDFLARE_RANGES = [
+    '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18', '108.162.192.0/18',
+    '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+    '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+    '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32', '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32',
+];
+
+function ip_in_ranges(string $ip, array $cidrs): bool
+{
+    $bin = @inet_pton($ip);
+    if ($bin === false) {
+        return false;
+    }
+    foreach ($cidrs as $cidr) {
+        [$net, $bits] = explode('/', $cidr);
+        $netBin = @inet_pton($net);
+        if ($netBin === false || strlen($netBin) !== strlen($bin)) {
+            continue;
+        }
+        $bytes = intdiv((int) $bits, 8);
+        $rem = (int) $bits % 8;
+        if (substr($bin, 0, $bytes) !== substr($netBin, 0, $bytes)) {
+            continue;
+        }
+        if ($rem === 0 || ((ord($bin[$bytes]) ^ ord($netBin[$bytes])) & (0xFF << (8 - $rem)) & 0xFF) === 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /** Allows $max actions per $seconds for $key. Returns false once the limit is reached. */
@@ -1293,6 +1367,8 @@ final class Ai
             'json' => ['model' => $s['model'], 'messages' => [['role' => 'system', 'content' => $system], ['role' => 'user', 'content' => $user]], 'temperature' => 0.8],
             'headers' => $headers,
             'timeout' => 120,
+            // A custom provider is set by the instance admin and is often a local Ollama server.
+            'allow_private' => !in_array($s['provider'], ['openrouter', 'openai'], true),
         ]);
         if (!Http::ok($res)) {
             $msg = $res['json']['error']['message'] ?? 'HTTP ' . $res['status'];
@@ -1627,8 +1703,32 @@ final class Auth
             self::$loaded = true;
             $id = $_SESSION['user_id'] ?? null;
             self::$user = $id ? Db::one('SELECT * FROM users WHERE id = ?', [$id]) : null;
+            if (self::$user) {
+                // Sessions belong to a password: changing it signs out every other browser.
+                $fp = self::fingerprint(self::$user);
+                if (!isset($_SESSION['pw'])) {
+                    $_SESSION['pw'] = $fp; // sessions from before this check
+                } elseif (!hash_equals($_SESSION['pw'], $fp)) {
+                    unset($_SESSION['user_id'], $_SESSION['pw']);
+                    self::$user = null;
+                }
+            }
         }
         return self::$user;
+    }
+
+    private static function fingerprint(array $user): string
+    {
+        return substr(hash_hmac('sha256', (string) $user['password'], (string) Config::get('app_key')), 0, 32);
+    }
+
+    /** Keeps this browser signed in after its own password change. */
+    public static function rememberPassword(): void
+    {
+        $user = Db::one('SELECT * FROM users WHERE id = ?', [$_SESSION['user_id'] ?? 0]);
+        if ($user) {
+            $_SESSION['pw'] = self::fingerprint($user);
+        }
     }
 
     public static function id(): ?int
@@ -1653,7 +1753,9 @@ final class Auth
     {
         session_regenerate_id(true);
         $_SESSION['user_id'] = $userId;
+        unset($_SESSION['pw']);
         self::$loaded = false;
+        self::user();
     }
 
     public static function logout(): void
@@ -1691,6 +1793,9 @@ final class Autolists
         $now ??= time();
         $created = 0;
         foreach (Db::all('SELECT * FROM autolists WHERE active = 1') as $list) {
+            if (!Cloud::workspaceActive((int) $list['workspace_id'])) {
+                continue; // paused hosted workspace
+            }
             $tz = new \DateTimeZone($list['timezone'] ?: 'UTC');
             $local = (new \DateTimeImmutable('@' . $now))->setTimezone($tz);
             foreach (json_arr($list['slots']) as $slot) {
@@ -2347,6 +2452,10 @@ final class Cloud
         return 0;
     }
 
+    public static function userDeleting(int $userId): void
+    {
+    }
+
     public static function adminIds(): array
     {
         return array_map('intval', array_column(Db::all('SELECT id FROM users WHERE is_admin = 1'), 'id'));
@@ -2583,10 +2692,40 @@ final class Config
             exit(self::FILE . ' is missing app_key. Set it to a random 64-character hex string.');
         }
         if (empty(self::$values['db_path'])) {
-            self::$values['db_path'] = BASE_PATH . '/.ht.kreatemix.sqlite';
+            self::$values['db_path'] = self::adoptDefaultDb($file);
         } elseif (!str_starts_with((string) self::$values['db_path'], '/') && !preg_match('#^[A-Za-z]:[\\\\/]#', (string) self::$values['db_path'])) {
             self::$values['db_path'] = BASE_PATH . '/' . self::$values['db_path'];
         }
+    }
+
+    /**
+     * Settings files without db_path (very old installs) used a predictable name next to index.php, which
+     * Nginx would serve to anyone who asked. Move that database to a private, random name and remember it.
+     */
+    private static function adoptDefaultDb(string $file): string
+    {
+        $old = BASE_PATH . '/.ht.kreatemix.sqlite';
+        $new = self::defaultDbPath();
+        $newAbs = str_starts_with($new, '/') ? $new : BASE_PATH . '/' . $new;
+        if (is_file($old) && !@rename($old, $newAbs)) {
+            return $old;
+        }
+        foreach (['-wal', '-shm'] as $suffix) {
+            if (is_file($old . $suffix)) {
+                @rename($old . $suffix, $newAbs . $suffix);
+            }
+        }
+        $values = self::$values + ['db_path' => $new];
+        $values['db_path'] = $new;
+        $php = "<?php\n// KreateMix settings. Keep this file private and back it up with the database.\nreturn " . var_export($values, true) . ";\n";
+        if (@file_put_contents($file, $php, LOCK_EX) === false) {
+            // Can't save where it went: put it back so the next request finds it.
+            if (is_file($newAbs)) {
+                @rename($newAbs, $old);
+            }
+            return $old;
+        }
+        return $newAbs;
     }
 
     private static function create(string $file): void
@@ -3226,7 +3365,7 @@ final class ApiController
             $out = fopen('php://output', 'w');
             fputcsv($out, ['date', 'account_id', 'account', 'network', 'followers', 'posts', 'likes', 'comments', 'shares', 'impressions', 'engagement']);
             foreach ($rows as $r) {
-                fputcsv($out, array_values($r));
+                fputcsv($out, array_map('csv_cell', array_values($r)));
             }
             fclose($out);
             exit;
@@ -3401,23 +3540,19 @@ final class AuthController
         $email = (string) input('email', '');
         $password = (string) input('password', '');
 
-        $attempts = $_SESSION['_login_attempts'] ?? ['n' => 0, 't' => time()];
-        if (time() - $attempts['t'] > 600) {
-            $attempts = ['n' => 0, 't' => time()];
-        }
-        if ($attempts['n'] >= 8) {
-            flash('error', 'Too many attempts. Wait a few minutes and try again.');
+        // Limits are kept in the database, per address and per account, so a fresh session doesn't reset them.
+        $emailKey = 'login-email:' . mb_strtolower(trim($email));
+        if (!kv_rate('login-ip:' . client_ip(), 30, 900) || !kv_rate($emailKey, 10, 900)) {
+            flash('error', 'Too many attempts. Wait 15 minutes and try again.');
             redirect('/login');
         }
 
         if (!Auth::attempt($email, $password)) {
-            $attempts['n']++;
-            $_SESSION['_login_attempts'] = $attempts;
             with_old(['email' => $email]);
             flash('error', 'Those details don’t match an account.');
             redirect('/login');
         }
-        unset($_SESSION['_login_attempts']);
+        kv_delete('rate:' . hash('sha256', $emailKey));
         $intended = $_SESSION['_intended'] ?? null;
         unset($_SESSION['_intended']);
         if ($intended && str_starts_with($intended, base_path() . '/') && !str_contains($intended, '//')) {
@@ -3617,7 +3752,7 @@ final class AutolistsController
         $list = $this->find($id);
         $items = Db::all('SELECT * FROM autolist_items WHERE autolist_id = ? ORDER BY position, id', [$list['id']]);
         foreach ($items as &$it) {
-            $it['media_items'] = Publisher::resolveMedia(json_arr($it['media']));
+            $it['media_items'] = Publisher::resolveMedia(json_arr($it['media']), false, Workspace::id());
         }
         unset($it);
         view('autolists/show', [
@@ -3665,8 +3800,18 @@ final class AutolistsController
         ];
     }
 
+    /** Autolist posts skip approval, so in workspaces that require it only admins can change what autolists post. */
+    private static function requireApprovalRights(): void
+    {
+        if (!Workspace::can('admin') && Db::value('SELECT require_approval FROM workspaces WHERE id = ?', [Workspace::id()])) {
+            flash('error', 'This workspace requires approval, so only admins can change autolists.');
+            back('/autolists');
+        }
+    }
+
     public function store(): void
     {
+        self::requireApprovalRights();
         $id = Db::insert('autolists', $this->fields() + ['workspace_id' => Workspace::id(), 'created_by' => Auth::id(), 'created_at' => now()]);
         flash('success', 'Autolist created. Add posts to it.');
         redirect('/autolists/' . $id);
@@ -3674,6 +3819,7 @@ final class AutolistsController
 
     public function update(string $id): void
     {
+        self::requireApprovalRights();
         $list = $this->find($id);
         Db::update('autolists', $this->fields() + ['active' => input('active') ? 1 : 0], 'id = ?', [$list['id']]);
         flash('success', 'Saved.');
@@ -3690,6 +3836,7 @@ final class AutolistsController
 
     public function addItem(string $id): void
     {
+        self::requireApprovalRights();
         $list = $this->find($id);
         $content = str_replace("\r\n", "\n", trim((string) input('content', '')));
         $media = array_values(array_filter(array_map('intval', (array) input('media', []))));
@@ -3721,6 +3868,7 @@ final class AutolistsController
     /** Copies an existing post into an autolist. */
     public function addPost(string $id): void
     {
+        self::requireApprovalRights();
         $post = Db::one('SELECT * FROM posts WHERE id = ? AND workspace_id = ?', [(int) $id, Workspace::id()]);
         $list = $this->find((string) input('autolist', '0'));
         if (!$post) {
@@ -3734,6 +3882,7 @@ final class AutolistsController
 
     public function publishNow(string $id): void
     {
+        self::requireApprovalRights();
         $list = $this->find($id);
         $postId = Autolists::publishNext($list);
         if ($postId) {
@@ -4087,10 +4236,7 @@ final class CanvaController
     {
         $pending = $_SESSION['_canva'] ?? null;
         unset($_SESSION['_canva']);
-        $back = $pending['back'] ?? '/media';
-        if (!str_starts_with($back, '/')) {
-            $back = '/media';
-        }
+        $back = safe_path($pending['back'] ?? null, '/media');
         if (!$pending || !hash_equals($pending['state'], (string) input('state', ''))) {
             flash('error', 'The Canva connection expired. Try again.');
             redirect($back);
@@ -4434,7 +4580,7 @@ final class DriveController
     {
         $pending = $_SESSION['_gdrive'] ?? null;
         unset($_SESSION['_gdrive']);
-        $back = str_starts_with((string) ($pending['back'] ?? ''), '/') ? $pending['back'] : '/media';
+        $back = safe_path($pending['back'] ?? null, '/media');
         if (!$pending || !hash_equals($pending['state'], (string) input('state', '')) || input('error')) {
             flash('error', 'Google Drive connection cancelled or expired.');
             redirect($back);
@@ -4569,7 +4715,7 @@ final class HashtagsController
         $out = fopen('php://output', 'w');
         fputcsv($out, ['network', 'posted_at_utc', 'author', 'text', 'likes', 'reposts', 'replies', 'url']);
         foreach (Db::all('SELECT * FROM hashtag_posts WHERE hashtag_id = ? ORDER BY posted_at DESC', [$h['id']]) as $p) {
-            fputcsv($out, [$p['network'], $p['posted_at'], $p['author_handle'], $p['text'], $p['likes'], $p['reposts'], $p['replies'], $p['url']]);
+            fputcsv($out, array_map('csv_cell', [$p['network'], $p['posted_at'], $p['author_handle'], $p['text'], $p['likes'], $p['reposts'], $p['replies'], $p['url']]));
         }
         fclose($out);
         exit;
@@ -4582,6 +4728,7 @@ namespace App\Controllers {
 
 // ---- Controllers/ImportController.php ----
 use App\Auth;
+use App\Config;
 use App\Db;
 use App\Http;
 use App\PostService;
@@ -4746,7 +4893,7 @@ final class ImportController
                     $mediaIds[] = (int) $m;
                     continue;
                 }
-                $res = Http::get($m, ['timeout' => 120, 'headers' => ['Accept' => '*/*']]);
+                $res = Http::get($m, ['timeout' => 120, 'headers' => ['Accept' => '*/*'], 'max_bytes' => (int) Config::get('max_upload_mb', 200) * 1024 * 1024]);
                 if (!Http::ok($res)) {
                     $failed[] = "Line {$row['line']}: couldn’t download $m";
                     continue 2;
@@ -4899,6 +5046,11 @@ final class InboxController
 
     public function refresh(): void
     {
+        // Checking asks every network for comments, so don't let it be hammered.
+        if (!kv_rate('inbox.refresh:' . Workspace::id(), 4, 300)) {
+            flash('error', 'The inbox was just checked. Try again in a few minutes.');
+            redirect('/inbox');
+        }
         kv_delete('inbox.checked');
         $n = Inbox::fetchDue(0);
         flash('success', $n ? "$n new comment" . ($n === 1 ? '' : 's') . '.' : 'No new comments.');
@@ -5006,8 +5158,7 @@ final class IntegrationsController
     /** Scheduler controls: add or remove the cron job, or switch the page-view fallback. */
     public function scheduler(string $action): void
     {
-        $back = (string) input('back', '/admin/integrations');
-        $back = str_starts_with($back, '/') && !str_starts_with($back, '//') ? $back : '/admin/integrations';
+        $back = safe_path(input('back'), '/admin/integrations');
         if ($action === 'install') {
             [$ok, $msg] = \App\Scheduler::install();
             flash($ok ? 'success' : 'error', $msg);
@@ -5186,7 +5337,7 @@ final class LibraryController
         $id = (int) input('id', 0);
         $name = mb_substr((string) input('name', ''), 0, 80);
         $content = str_replace("\r\n", "\n", (string) input('content', ''));
-        $media = array_values(array_filter(array_map('intval', (array) input('media', []))));
+        $media = \App\PostService::ownedIds('media', input('media', []), Workspace::id(), keepOrder: true);
         if ($name === '' || ($content === '' && !$media)) {
             if (wants_json()) {
                 json_response(['error' => 'A template needs a name and some text.'], 422);
@@ -5201,7 +5352,7 @@ final class LibraryController
             $id = Db::insert('templates', $row + ['workspace_id' => Workspace::id(), 'created_by' => Auth::id(), 'created_at' => now()]);
         }
         if (wants_json()) {
-            json_response(['template' => Db::one('SELECT id, name, content FROM templates WHERE id = ?', [$id])]);
+            json_response(['template' => Db::one('SELECT id, name, content FROM templates WHERE id = ? AND workspace_id = ?', [$id, Workspace::id()])]);
         }
         flash('success', 'Template saved.');
         redirect('/library#templates');
@@ -5339,6 +5490,9 @@ final class McpController
             json_response(['jsonrpc' => '2.0', 'id' => null, 'error' => ['code' => -32700, 'message' => 'Parse error']], 400);
         }
         $batch = array_is_list($body) ? $body : [$body];
+        if (count($batch) > 20) {
+            json_response(['jsonrpc' => '2.0', 'id' => null, 'error' => ['code' => -32600, 'message' => 'Send at most 20 requests at once.']], 400);
+        }
         $out = [];
         foreach ($batch as $msg) {
             $res = $this->dispatch(is_array($msg) ? $msg : []);
@@ -5977,7 +6131,7 @@ final class PostsController
             'tagIds' => $tagIds,
             'accounts' => self::accounts(),
             'providers' => $providers,
-            'media' => Publisher::resolveMedia(json_arr($post['media'])),
+            'media' => Publisher::resolveMedia(json_arr($post['media']), false, $wsId),
             'tags' => Db::all('SELECT * FROM tags WHERE workspace_id = ? ORDER BY name', [$wsId]),
             'templates' => Db::all('SELECT id, name, content FROM templates WHERE workspace_id = ? ORDER BY name', [$wsId]),
             'hashtagGroups' => Db::all('SELECT * FROM hashtag_groups WHERE workspace_id = ? ORDER BY name', [$wsId]),
@@ -6189,6 +6343,10 @@ final class ProfileController
             flash('error', 'Another account uses that email.');
             redirect('/profile');
         }
+        if (strcasecmp($email, (string) Auth::user()['email']) !== 0 && !password_verify((string) input('current_password', ''), (string) Auth::user()['password'])) {
+            flash('error', 'Enter your current password to change your email.');
+            redirect('/profile');
+        }
         if (!in_array($tz, \DateTimeZone::listIdentifiers(), true)) {
             $tz = 'UTC';
         }
@@ -6211,6 +6369,7 @@ final class ProfileController
         }
         Db::update('users', ['password' => password_hash($new, PASSWORD_DEFAULT)], 'id = ?', [$user['id']]);
         session_regenerate_id(true);
+        Auth::rememberPassword();
         flash('success', 'Password changed.');
         redirect('/profile');
     }
@@ -6242,7 +6401,7 @@ final class PushController
         }
         Db::query(
             'INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, user_agent, created_at) VALUES (?, ?, ?, ?, ?, ?)
-             ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth',
+             ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth WHERE push_subscriptions.user_id = excluded.user_id',
             [Auth::id(), $endpoint, (string) $keys['p256dh'], (string) $keys['auth'], mb_substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 200), now()]
         );
         json_response(['ok' => true]);
@@ -6623,6 +6782,7 @@ final class UsersController
             flash('error', 'You can’t delete yourself.');
             redirect('/admin/users');
         }
+        \App\Cloud::userDeleting($id);
         Db::query('DELETE FROM users WHERE id = ?', [$id]);
         flash('success', 'User deleted. Their posts stay in the workspace.');
         redirect('/admin/users');
@@ -6699,7 +6859,7 @@ final class WebsitesController
         if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             $raw = (string) file_get_contents('php://input', false, null, 0, 8192);
             $data = json_decode($raw, true);
-            if (is_array($data)) {
+            if (is_array($data) && kv_rate('collect:' . client_ip(), 120, 60)) {
                 try {
                     WebAnalytics::collect($data, $_SERVER);
                 } catch (\Throwable $e) {
@@ -7479,45 +7639,158 @@ final class Http
 
     public static function request(string $method, string $url, array $options = []): array
     {
+        if (isset($options['query']) && $options['query']) {
+            $url .= (str_contains($url, '?') ? '&' : '?') . http_build_query($options['query']);
+            unset($options['query']);
+        }
         if (self::$fake !== null) {
-            if (isset($options['query']) && $options['query']) {
-                $url .= (str_contains($url, '?') ? '&' : '?') . http_build_query($options['query']);
-            }
             $r = (self::$fake)(strtoupper($method), $url, $options);
             return $r + ['status' => 200, 'body' => json_encode($r['json'] ?? []), 'json' => [], 'headers' => []];
         }
-        $ch = curl_init();
-        $headers = [];
-        foreach ($options['headers'] ?? [] as $k => $v) {
-            $headers[] = "$k: $v";
-        }
-
+        $method = strtoupper($method);
+        $headers = $options['headers'] ?? [];
         if (isset($options['json'])) {
             $body = json_encode($options['json'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-            $headers[] = 'Content-Type: application/json';
+            $headers['Content-Type'] = 'application/json';
         } elseif (isset($options['form'])) {
             $body = http_build_query($options['form']);
-            $headers[] = 'Content-Type: application/x-www-form-urlencoded';
+            $headers['Content-Type'] = 'application/x-www-form-urlencoded';
         } elseif (isset($options['multipart'])) {
             $body = $options['multipart'];
         } else {
             $body = $options['body'] ?? null;
         }
 
-        if (isset($options['query']) && $options['query']) {
-            $url .= (str_contains($url, '?') ? '&' : '?') . http_build_query($options['query']);
+        // Redirects are followed here, one hop at a time, so every address is checked before connecting.
+        $origin = strtolower((string) parse_url($url, PHP_URL_HOST));
+        for ($hop = 0; ; $hop++) {
+            $res = self::send($method, $url, $headers, $body, $options);
+            $location = $res['headers']['location'] ?? '';
+            if (!in_array($res['status'], [301, 302, 303, 307, 308], true) || $location === '' || !empty($options['no_redirects'])) {
+                return $res;
+            }
+            if ($hop >= 5) {
+                throw new \RuntimeException('Request to ' . parse_url($url, PHP_URL_HOST) . ' failed: too many redirects');
+            }
+            $url = self::resolveUrl($url, $location);
+            if ($res['status'] === 303 || (in_array($res['status'], [301, 302], true) && $method === 'POST')) {
+                $method = 'GET';
+                $body = null;
+                unset($headers['Content-Type']);
+            }
+            if (strtolower((string) parse_url($url, PHP_URL_HOST)) !== $origin) {
+                // Never hand credentials to another host.
+                foreach (array_keys($headers) as $k) {
+                    if (in_array(strtolower((string) $k), ['authorization', 'cookie', 'access-token', 'x-api-key'], true)) {
+                        unset($headers[$k]);
+                    }
+                }
+            }
         }
+    }
 
+    /** Whether requests to private and internal addresses are allowed (local development, or a LAN-only install). */
+    private static function privateAllowed(array $options): bool
+    {
+        return !empty($options['allow_private']) || Config::get('debug') || Config::get('allow_private_urls');
+    }
+
+    /** True for addresses on the public internet; false for loopback, private, link-local, CGNAT and reserved ones. */
+    public static function isPublicIp(string $ip): bool
+    {
+        $bin = @inet_pton($ip);
+        if ($bin === false) {
+            return false;
+        }
+        if (strlen($bin) === 16) {
+            // IPv4 written as IPv6 (::ffff:10.0.0.1, ::10.0.0.1, 64:ff9b::10.0.0.1): judge the IPv4 part.
+            if (str_starts_with($bin, str_repeat("\0", 10) . "\xff\xff") || str_starts_with($bin, str_repeat("\0", 12)) || str_starts_with($bin, "\x00\x64\xff\x9b" . str_repeat("\0", 8))) {
+                return self::isPublicIp((string) inet_ntop(substr($bin, 12)));
+            }
+            if (in_array(ord($bin[0]) & 0xfe, [0xfc], true) || (ord($bin[0]) === 0xfe && (ord($bin[1]) & 0xc0) === 0x80)) {
+                return false; // fc00::/7 unique local, fe80::/10 link-local
+            }
+        } elseif (ip_in_ranges($ip, ['100.64.0.0/10', '0.0.0.0/8', '192.0.0.0/24', '198.18.0.0/15'])) {
+            return false;
+        }
+        return (bool) filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
+    }
+
+    /** Checks the URL and returns the IP addresses to connect to (empty when the system resolver must decide, e.g. behind a proxy). */
+    private static function vet(string $url, array $options): array
+    {
+        $p = parse_url($url);
+        $scheme = strtolower((string) ($p['scheme'] ?? ''));
+        $host = trim((string) ($p['host'] ?? ''), '[]');
+        if (!in_array($scheme, ['http', 'https'], true) || $host === '') {
+            throw new \RuntimeException('Only http and https web addresses can be fetched.');
+        }
+        if (self::privateAllowed($options)) {
+            return [];
+        }
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            $ips = [$host];
+        } else {
+            $ips = [];
+            foreach (@dns_get_record($host, DNS_A | DNS_AAAA) ?: [] as $r) {
+                $ips[] = $r['ip'] ?? $r['ipv6'] ?? null;
+            }
+            $ips = array_values(array_filter($ips));
+            if (!$ips) {
+                $ips = @gethostbynamel($host) ?: [];
+            }
+            if (!$ips) {
+                if (getenv('https_proxy') || getenv('HTTPS_PROXY') || getenv('http_proxy') || getenv('HTTP_PROXY')) {
+                    return []; // the proxy resolves names; it decides where requests may go
+                }
+                throw new \RuntimeException("Couldn’t find the server $host.");
+            }
+        }
+        foreach ($ips as $ip) {
+            if (!self::isPublicIp($ip)) {
+                throw new \RuntimeException("$host points to a private or internal address, which KreateMix doesn’t connect to.");
+            }
+        }
+        return $ips;
+    }
+
+    private static function resolveUrl(string $base, string $location): string
+    {
+        if (preg_match('#^[a-z][a-z0-9+.-]*:#i', $location)) {
+            return $location;
+        }
+        $p = parse_url($base);
+        $root = $p['scheme'] . '://' . (str_contains($p['host'], ':') ? '[' . $p['host'] . ']' : $p['host']) . (isset($p['port']) ? ':' . $p['port'] : '');
+        if (str_starts_with($location, '//')) {
+            return $p['scheme'] . ':' . $location;
+        }
+        if (str_starts_with($location, '/')) {
+            return $root . $location;
+        }
+        $dir = preg_replace('#/[^/]*$#', '/', $p['path'] ?? '/');
+        return $root . $dir . $location;
+    }
+
+    private static function send(string $method, string $url, array $headers, mixed $body, array $options): array
+    {
+        $ips = self::vet($url, $options);
+        $ch = curl_init();
+        $lines = [];
+        foreach (['Accept' => 'application/json', 'User-Agent' => 'KreateMix/1.0'] + $headers as $k => $v) {
+            $lines[] = "$k: $v";
+        }
         $respHeaders = [];
+        $max = (int) ($options['max_bytes'] ?? 1024 * 1024 * 1024);
         curl_setopt_array($ch, [
             CURLOPT_URL => $url,
-            CURLOPT_CUSTOMREQUEST => strtoupper($method),
+            CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS => 5,
+            CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_CONNECTTIMEOUT => 15,
             CURLOPT_TIMEOUT => $options['timeout'] ?? 60,
-            CURLOPT_HTTPHEADER => array_merge(['Accept: application/json', 'User-Agent: KreateMix/1.0'], $headers),
+            CURLOPT_HTTPHEADER => $lines,
+            CURLOPT_NOPROGRESS => false,
+            CURLOPT_XFERINFOFUNCTION => fn($ch, $dlTotal, $dl) => $dl > $max ? 1 : 0,
             CURLOPT_HEADERFUNCTION => function ($ch, $line) use (&$respHeaders) {
                 $parts = explode(':', $line, 2);
                 if (count($parts) === 2) {
@@ -7526,16 +7799,33 @@ final class Http
                 return strlen($line);
             },
         ]);
+        if (defined('CURLOPT_PROTOCOLS_STR')) {
+            curl_setopt($ch, CURLOPT_PROTOCOLS_STR, 'http,https');
+        } else {
+            curl_setopt($ch, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+        }
+        if ($ips) {
+            // Connect to the addresses just checked, so the name can't be switched to an internal one in between.
+            $p = parse_url($url);
+            $port = $p['port'] ?? (strtolower($p['scheme']) === 'https' ? 443 : 80);
+            $host = trim($p['host'], '[]');
+            curl_setopt($ch, CURLOPT_RESOLVE, [$host . ':' . $port . ':' . implode(',', array_map(fn($ip) => str_contains($ip, ':') ? "[$ip]" : $ip, $ips))]);
+        }
+        if (!empty($options['resolve'])) {
+            $p = parse_url($url);
+            $port = $p['port'] ?? (strtolower($p['scheme']) === 'https' ? 443 : 80);
+            curl_setopt($ch, CURLOPT_RESOLVE, [trim($p['host'], '[]') . ':' . $port . ':' . $options['resolve']]);
+        }
         if ($body !== null) {
             curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-        } elseif (in_array(strtoupper($method), ['POST', 'PUT', 'PATCH'], true)) {
+        } elseif (in_array($method, ['POST', 'PUT', 'PATCH'], true)) {
             // Send an explicit empty body so servers get Content-Length: 0.
             curl_setopt($ch, CURLOPT_POSTFIELDS, '');
         }
 
         $raw = curl_exec($ch);
         if ($raw === false) {
-            $err = curl_error($ch);
+            $err = curl_errno($ch) === CURLE_ABORTED_BY_CALLBACK ? 'the response is too large' : curl_error($ch);
             unset($ch);
             throw new \RuntimeException("Request to " . parse_url($url, PHP_URL_HOST) . " failed: $err");
         }
@@ -7960,7 +8250,9 @@ final class MediaTools
         if (!function_exists('imagecreatefromstring')) {
             return $m;
         }
-        $key = 'cache-' . $m['id'] . '-' . ($maxBytes ?? 0) . '-' . ($maxSide ?? 0) . '.jpg';
+        $variant = $m['id'] . '-' . ($maxBytes ?? 0) . '-' . ($maxSide ?? 0);
+        // The keyed hash keeps converted copies as unguessable as the originals.
+        $key = 'cache-' . $m['id'] . '-' . substr(hash_hmac('sha256', $variant, (string) Config::get('app_key')), 0, 32) . '.jpg';
         if (!Blob::exists($key)) {
             $src = @imagecreatefromstring((string) file_get_contents($m['path']));
             if (!$src) {
@@ -8774,7 +9066,7 @@ final class PostService
     }
 
     /** Filters ids to those belonging to the workspace. */
-    private static function ownedIds(string $table, mixed $ids, int $workspaceId, bool $keepOrder = false): array
+    public static function ownedIds(string $table, mixed $ids, int $workspaceId, bool $keepOrder = false): array
     {
         $ids = array_values(array_unique(array_filter(array_map('intval', (array) $ids))));
         if (!$ids) {
@@ -11798,13 +12090,20 @@ final class Publisher
     }
 
     /** Turns stored media ids into file paths and public URLs for providers. */
-    public static function resolveMedia(array $ids, bool $files = false): array
+    /** Media rows for the given ids, in order. Pass $workspaceId to drop ids from other workspaces. */
+    public static function resolveMedia(array $ids, bool $files = false, ?int $workspaceId = null): array
     {
         if (!$ids) {
             return [];
         }
         $ids = array_map('intval', $ids);
-        $rows = Db::all('SELECT * FROM media WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', $ids);
+        $sql = 'SELECT * FROM media WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
+        $params = $ids;
+        if ($workspaceId !== null) {
+            $sql .= ' AND workspace_id = ?';
+            $params[] = $workspaceId;
+        }
+        $rows = Db::all($sql, $params);
         $byId = array_column($rows, null, 'id');
         $out = [];
         foreach ($ids as $id) {
@@ -12404,6 +12703,9 @@ final class Reports
     {
         $sent = 0;
         foreach (Db::all('SELECT s.*, w.name AS workspace_name, u.timezone FROM report_schedules s JOIN workspaces w ON w.id = s.workspace_id LEFT JOIN users u ON u.id = s.created_by') as $s) {
+            if (!Cloud::workspaceActive((int) $s['workspace_id'])) {
+                continue; // paused hosted workspace
+            }
             $tz = $s['timezone'] ?: 'UTC';
             $now = new \DateTimeImmutable('now', new \DateTimeZone($tz));
             if ((int) $now->format('G') < 8) {
@@ -13136,7 +13438,8 @@ final class WebPush
                 'Content-Encoding' => 'aes128gcm',
                 'TTL' => '86400',
                 'Urgency' => 'normal',
-                'Authorization' => 'vapid t=' . self::jwt($audience, 'mailto:' . $admin) . ', k=' . $v['public'],
+                // The contact is the site's address, so the admin's email isn't sent to push services.
+                'Authorization' => 'vapid t=' . self::jwt($audience, str_starts_with(abs_url(''), 'https://') ? rtrim(abs_url(''), '/') : 'mailto:' . $admin) . ', k=' . $v['public'],
             ],
         ]);
         if (in_array($res['status'], [404, 410], true)) {
@@ -14278,7 +14581,7 @@ function mc_view_analytics_top_posts(array $__vars): void
         <?php foreach ($top as $p): $m = $p['m']; ?>
             <tr>
                 <td><a href="<?= e(url('/posts/' . $p['id'])) ?>"><?= e(str_limit($p['content'] ?: '(media)', 70)) ?></a>
-                    <div class="muted small"><?= e(local_time($p['published_at'], 'M j')) ?><?php if ($p['url']): ?> · <a href="<?= e($p['url']) ?>" target="_blank" rel="noopener">View</a><?php endif; ?></div></td>
+                    <div class="muted small"><?= e(local_time($p['published_at'], 'M j')) ?><?php if ($p['url']): ?> · <a href="<?= e(safe_href($p['url'])) ?>" target="_blank" rel="noopener">View</a><?php endif; ?></div></td>
                 <td><?= provider_badge($p['provider'], 'pdot') ?> <?= e($p['account_name']) ?></td>
                 <td class="num"><?= number_format((int) ($m['likes'] ?? $m['reactions'] ?? 0)) ?></td>
                 <td class="num"><?= number_format((int) ($m['replies'] ?? $m['comments'] ?? 0)) ?></td>
@@ -15249,7 +15552,7 @@ function mc_view_developers_index(array $__vars): void
         <details class="lib-item">
             <summary>
                 <span class="badge <?= $h['active'] ? 'status-published' : '' ?>"><?= $h['active'] ? 'Active' : 'Paused' ?></span>
-                <code class="grow ellipsis"><?= e($h['url']) ?></code>
+                <code class="grow ellipsis"><?= e($isAdmin ? $h['url'] : (parse_url($h['url'], PHP_URL_SCHEME) . '://' . parse_url($h['url'], PHP_URL_HOST) . '/…')) ?></code>
                 <span class="muted small"><?= $ev ? count($ev) . ' events' : 'All events' ?></span>
             </summary>
             <?php if ($isAdmin): ?>
@@ -15399,7 +15702,7 @@ $netName = fn($k) => $networks[$k] ?? $k;
                 <div class="tag-post">
                     <div class="muted small"><?= provider_badge($p['network'], 'pdot') ?> <?= e($p['author_name'] ?: ($p['author_handle'] ? '@' . $p['author_handle'] : $netName($p['network']))) ?> · <?= e(local_time($p['posted_at'], 'M j')) ?> · <?= (int) ($p['likes'] + $p['reposts'] + $p['replies']) ?> engagements</div>
                     <p><?= e(str_limit($p['text'], 220)) ?></p>
-                    <?php if ($p['url']): ?><a class="link small" href="<?= e($p['url']) ?>" target="_blank" rel="noopener">Open <?= icon('external') ?></a><?php endif; ?>
+                    <?php if ($p['url']): ?><a class="link small" href="<?= e(safe_href($p['url'])) ?>" target="_blank" rel="noopener">Open <?= icon('external') ?></a><?php endif; ?>
                 </div>
             <?php endforeach; ?>
         </section>
@@ -15536,7 +15839,7 @@ $canReply = Workspace::can('member');
         <?php if (($counts['new'] ?? 0) > 0): ?>
             <form method="post" action="<?= e(url('/inbox/read-all')) ?>"><?= csrf_field() ?><button class="btn" type="submit">Mark all read</button></form>
         <?php endif; ?>
-        <form method="post" action="<?= e(url('/inbox/refresh')) ?>"><?= csrf_field() ?><button class="btn" type="submit"><?= icon('refresh') ?> Check now</button></form>
+        <?php if (App\Workspace::can('member')): ?><form method="post" action="<?= e(url('/inbox/refresh')) ?>"><?= csrf_field() ?><button class="btn" type="submit"><?= icon('refresh') ?> Check now</button></form><?php endif; ?>
     </div>
 </div>
 
@@ -15589,7 +15892,7 @@ $canReply = Workspace::can('member');
                 </form>
             <?php endif; ?>
             <div class="inbox-actions">
-                <?php if ($i['url']): ?><a class="link" href="<?= e($i['url']) ?>" target="_blank" rel="noopener">Open <?= icon('external') ?></a><?php endif; ?>
+                <?php if ($i['url']): ?><a class="link" href="<?= e(safe_href($i['url'])) ?>" target="_blank" rel="noopener">Open <?= icon('external') ?></a><?php endif; ?>
                 <?php if ($canReply): ?>
                     <?php if ($i['status'] !== 'archived'): ?>
                         <form method="post" action="<?= e(url('/inbox/' . $i['id'] . '/status')) ?>"><?= csrf_field() ?><input type="hidden" name="status" value="archived"><button class="link" type="submit">Archive</button></form>
@@ -16572,7 +16875,7 @@ $data = [
                             <div class="muted small">Pending</div>
                         <?php endif; ?>
                     </div>
-                    <?php if ($t['url']): ?><a class="btn btn-sm" href="<?= e($t['url']) ?>" target="_blank" rel="noopener">View <?= icon('external') ?></a><?php endif; ?>
+                    <?php if ($t['url']): ?><a class="btn btn-sm" href="<?= e(safe_href($t['url'])) ?>" target="_blank" rel="noopener">View <?= icon('external') ?></a><?php endif; ?>
                 </div>
             <?php endforeach; ?>
             <?php if ($post['status'] === 'failed' && Workspace::can('member')): ?>
@@ -16917,6 +17220,7 @@ function mc_view_profile_edit(array $__vars): void
     <h2>Details</h2>
     <label class="field"><span>Name</span><input type="text" name="name" value="<?= e($user['name']) ?>" required></label>
     <label class="field"><span>Email</span><input type="email" name="email" value="<?= e($user['email']) ?>" required></label>
+    <label class="field"><span>Current password <span class="muted">(only to change your email)</span></span><input type="password" name="current_password" autocomplete="current-password"></label>
     <label class="field">
         <span>Timezone</span>
         <select name="timezone">
@@ -17203,7 +17507,7 @@ $tz = $tz ?? user_tz();
             <thead><tr><th>Post</th><th>Network</th><th class="num">Likes</th><th class="num">Comments</th><th class="num">Total</th></tr></thead>
             <?php foreach ($a['top'] as $p): $m = $p['m']; ?>
                 <tr>
-                    <td><?= e(str_limit($p['content'] ?: '(media)', 90)) ?><div class="muted small"><?= e(local_time($p['published_at'], 'M j', $tz)) ?><?php if ($p['url']): ?> · <a href="<?= e($p['url']) ?>" target="_blank" rel="noopener">View</a><?php endif; ?></div></td>
+                    <td><?= e(str_limit($p['content'] ?: '(media)', 90)) ?><div class="muted small"><?= e(local_time($p['published_at'], 'M j', $tz)) ?><?php if ($p['url']): ?> · <a href="<?= e(safe_href($p['url'])) ?>" target="_blank" rel="noopener">View</a><?php endif; ?></div></td>
                     <td><?= provider_badge($p['provider'], 'pdot') ?> <?= e($p['account_name']) ?></td>
                     <td class="num"><?= number_format((int) ($m['likes'] ?? $m['reactions'] ?? 0)) ?></td>
                     <td class="num"><?= number_format((int) ($m['replies'] ?? $m['comments'] ?? 0)) ?></td>
@@ -20564,7 +20868,7 @@ if (preg_match('/apache|litespeed/i', $_SERVER['SERVER_SOFTWARE'] ?? '') && !is_
 // Answers the clean-URL check (see url_mode()) before anything that depends on it.
 if (str_ends_with((string) parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH), '/mc-url-check')) {
     header('Content-Type: text/plain');
-    exit('kreatemix-url-ok');
+    exit('kreatemix-url-ok:' . url_check_token());
 }
 
 // Static files and stored media need no session.
@@ -20615,6 +20919,7 @@ if ($earlyPath === '/mcp') {
 
 $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
 session_name('kreatemix_session');
+ini_set('session.use_strict_mode', '1'); // never adopt a session id the server didn't create
 session_set_cookie_params([
     'lifetime' => 0,
     'path' => (base_path() ?: '') . '/',
@@ -20757,7 +21062,7 @@ $r->group(['auth'], function (Router $r) {
         $r->post('/competitors/{id}/refresh', [CompetitorsController::class, 'refresh'], ['role:member']);
 
         $r->get('/inbox', [InboxController::class, 'index']);
-        $r->post('/inbox/refresh', [InboxController::class, 'refresh']);
+        $r->post('/inbox/refresh', [InboxController::class, 'refresh'], ['role:member']);
         $r->post('/inbox/read-all', [InboxController::class, 'markAllRead'], ['role:member']);
         $r->post('/inbox/{id}/reply', [InboxController::class, 'reply'], ['role:member']);
         $r->post('/inbox/{id}/status', [InboxController::class, 'status'], ['role:member']);

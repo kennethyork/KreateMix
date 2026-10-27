@@ -83,6 +83,10 @@ final class Cloud
         return 0;
     }
 
+    public static function userDeleting(int $userId): void
+    {
+    }
+
     public static function adminIds(): array
     {
         return array_map('intval', array_column(Db::all('SELECT id FROM users WHERE is_admin = 1'), 'id'));

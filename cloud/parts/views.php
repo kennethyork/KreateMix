@@ -247,8 +247,10 @@ $fmt = fn(?string $d) => $d ? local_time($d, 'M j, Y') : '';
 <?php if (!$isOwner): ?>
     <div class="notice <?= $active ? 'notice-info' : 'notice-warn' ?>"><?= icon($active ? 'card' : 'alert') ?>
         <div><?= $active
-            ? 'This workspace is on ' . e($ownerName) . '’s plan. They manage billing.'
-            : 'This workspace is paused because ' . e($ownerName) . '’s subscription isn’t active. Ask them to choose a plan under Billing.' ?></div>
+            ? 'This workspace is on ' . e((string) $ownerName) . '’s plan. They manage billing.'
+            : ($ownerName === null || $ownerName === false
+                ? 'This workspace is paused because its owner’s account was removed. Ask the instance admin to move it to a new owner.'
+                : 'This workspace is paused because ' . e((string) $ownerName) . '’s subscription isn’t active or is over its plan’s limits. Ask them to check Billing.') ?></div>
     </div>
 <?php elseif (!$customer): ?>
     <div class="notice notice-info"><?= icon('card') ?><div>You’re the instance admin, so no plan is needed.</div></div>
@@ -256,7 +258,13 @@ $fmt = fn(?string $d) => $d ? local_time($d, 'M j, Y') : '';
     <?php if (!$active): ?>
         <div class="notice notice-warn"><?= icon('alert') ?><div><strong><?= $customer['status'] === 'canceled' ? 'Your subscription has ended.' : 'Your free trial has ended.' ?></strong> Scheduled posts are paused. Choose a plan below to pick up where you left off; nothing has been deleted.</div></div>
     <?php elseif ($customer['status'] === 'past_due'): ?>
-        <div class="notice notice-warn"><?= icon('alert') ?><div><strong>Your last payment didn’t go through.</strong> Update your card under “Payment method & invoices” to keep publishing.</div></div>
+        <div class="notice notice-warn"><?= icon('alert') ?><div><strong>Your last payment didn’t go through.</strong> Update your card under “Payment method & invoices” within 14 days to keep publishing.</div></div>
+    <?php endif; ?>
+    <?php if ($over): ?>
+        <?php $labels = ['workspaces' => 'brands', 'accounts' => 'social accounts', 'members' => 'team members']; ?>
+        <div class="notice notice-warn"><?= icon('alert') ?><div><strong>You’re over your plan’s limits, so scheduled posts are paused.</strong>
+            <?= e(implode('; ', array_map(fn($k, $v) => sprintf('%d of %d %s', $v[0], $v[1], $labels[$k] ?? $k), array_keys($over), $over))) ?>.
+            Remove some or choose a bigger plan.</div></div>
     <?php endif; ?>
 
     <section class="card billing-summary">

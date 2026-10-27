@@ -106,11 +106,20 @@ final class Cloud
         }
         return match ($c['status']) {
             'active', 'comp' => true,
-            // Stripe retries failed payments for a while; keep things running meanwhile and show a warning.
-            'past_due' => true,
+            // Stripe retries failed payments for a while; keep things running for up to 14 days and show a warning.
+            'past_due' => (time() - self::pastDueSince((int) $c['user_id'])) < 14 * 86400,
             'trialing' => $c['trial_ends_at'] === null || $c['trial_ends_at'] > now() || !empty($c['stripe_subscription_id']),
             default => false,
         };
+    }
+
+    private static function pastDueSince(int $userId): int
+    {
+        $t = kv_get('billing.past_due:' . $userId);
+        if (!is_int($t)) {
+            kv_set('billing.past_due:' . $userId, $t = time());
+        }
+        return $t;
     }
 
     public static function trialDaysLeft(array $c): ?int
@@ -140,10 +149,46 @@ final class Cloud
             return true;
         }
         $owner = self::ownerOf($workspaceId);
-        if ($owner === null || self::isInstanceAdmin($owner)) {
+        if ($owner === null) {
+            // The owner's account was deleted: nobody pays for it, so it stays paused. An admin can reassign it.
+            return false;
+        }
+        if (self::isInstanceAdmin($owner)) {
             return true;
         }
-        return self::isActive(self::customer($owner));
+        $c = self::customer($owner);
+        return self::isActive($c) && self::overLimits($owner) === [];
+    }
+
+    /** What the owner uses beyond their plan (e.g. after switching to a smaller plan): [what => [used, max]]. */
+    public static function overLimits(int $userId): array
+    {
+        $c = self::customer($userId);
+        $plan = self::plan($c['plan'] ?? null);
+        if (!$c || !$plan || $c['status'] === 'comp' || self::isInstanceAdmin($userId)) {
+            return [];
+        }
+        $over = [];
+        foreach (self::usage($userId) as $what => $used) {
+            $max = (int) ($plan[$what] ?? 0);
+            if ($max > 0 && $used > $max) {
+                $over[$what] = [$used, $max];
+            }
+        }
+        return $over;
+    }
+
+    /** Before an admin deletes a user: stop their subscription so a deleted customer isn't billed. */
+    public static function userDeleting(int $userId): void
+    {
+        $c = self::customer($userId);
+        if (!empty($c['stripe_subscription_id']) && self::stripeReady()) {
+            try {
+                self::stripe('DELETE', 'subscriptions/' . $c['stripe_subscription_id']);
+            } catch (\Throwable $e) {
+                log_event('error', 'Couldn’t cancel the Stripe subscription of deleted user ' . $userId . ': ' . $e->getMessage());
+            }
+        }
     }
 
     /** Hosted-service customers (anyone with a billing record) can make their own workspaces. */
@@ -181,7 +226,10 @@ final class Cloud
             return null;
         }
         $owner = $userId ?? ($workspaceId ? self::ownerOf($workspaceId) : null);
-        if ($owner === null || self::isInstanceAdmin($owner)) {
+        if ($owner === null) {
+            return 'This workspace has no owner with a plan. Ask the instance admin to reassign it.';
+        }
+        if (self::isInstanceAdmin($owner)) {
             return null;
         }
         $c = self::customer($owner);
@@ -226,6 +274,7 @@ final class Cloud
         }
         // stripe_api_base in the settings file points at stripe-mock or another test server.
         $base = rtrim((string) Config::get('stripe_api_base', 'https://api.stripe.com'), '/');
+        $opts['allow_private'] = Config::get('stripe_api_base') !== null; // a local test server, set by hand in the settings file
         $res = Http::request($method, $base . '/v1/' . ltrim($path, '/'), $opts);
         if ($res['status'] >= 400) {
             throw new \RuntimeException('Stripe: ' . ($res['json']['error']['message'] ?? 'HTTP ' . $res['status']));
@@ -236,12 +285,15 @@ final class Cloud
     /** A Stripe Checkout page for a plan subscription. Any trial time left carries over. */
     public static function planCheckoutUrl(int $userId, string $plan): string
     {
-        $p = self::plan($plan);
+        $p = self::plans()[$plan] ?? null;
         if (!$p || empty($p['stripe_price'])) {
             throw new \RuntimeException('This plan isn’t available for purchase yet.');
         }
         $user = Db::one('SELECT * FROM users WHERE id = ?', [$userId]);
         $c = self::customer($userId);
+        if (!empty($c['stripe_subscription_id']) && in_array($c['status'], ['active', 'trialing', 'past_due'], true)) {
+            throw new \RuntimeException('You already have a subscription. Use Manage billing to change plans.');
+        }
         $params = [
             'mode' => 'subscription',
             'line_items' => [['price' => $p['stripe_price'], 'quantity' => 1]],
@@ -331,8 +383,25 @@ final class Cloud
         if ($id === '' || Db::value('SELECT 1 FROM stripe_events WHERE id = ?', [$id])) {
             return false;
         }
-        Db::insert('stripe_events', ['id' => $id, 'type' => (string) ($event['type'] ?? ''), 'received_at' => now()]);
+        // Recorded and applied together: if applying fails, Stripe's retry gets a second chance.
+        Db::transaction(function () use ($event, $id) {
+            Db::insert('stripe_events', ['id' => $id, 'type' => (string) ($event['type'] ?? ''), 'received_at' => now()]);
+            self::applyEvent($event);
+        });
+        return true;
+    }
+
+    private static function applyEvent(array $event): void
+    {
         $o = $event['data']['object'] ?? [];
+        if (str_starts_with((string) ($event['type'] ?? ''), 'customer.subscription.') && !empty($o['id']) && self::stripeReady()) {
+            // Events can arrive out of order; use the subscription as it is now.
+            try {
+                $o = self::stripe('GET', 'subscriptions/' . $o['id']);
+            } catch (\Throwable $e) {
+                log_event('warning', 'Using the webhook copy of subscription ' . $o['id'] . ': ' . $e->getMessage());
+            }
+        }
         switch ($event['type'] ?? '') {
             case 'checkout.session.completed':
                 self::checkoutCompleted($o);
@@ -346,13 +415,13 @@ final class Cloud
                 if (!empty($o['subscription'])) {
                     $c = Db::one('SELECT * FROM billing_customers WHERE stripe_subscription_id = ?', [(string) $o['subscription']]);
                     if ($c) {
-                        Db::update('billing_customers', ['status' => 'past_due', 'updated_at' => now()], 'user_id = ?', [$c['user_id']]);
+                        Db::update('billing_customers', ['status' => $c['status'] === 'comp' ? 'comp' : 'past_due', 'updated_at' => now()], 'user_id = ?', [$c['user_id']]);
+                        self::trackPastDue((int) $c['user_id'], 'past_due');
                         Notify::users([(int) $c['user_id']], 'failed', 'Payment failed', 'Update your card under Billing to keep publishing.', '/billing');
                     }
                 }
                 break;
         }
-        return true;
     }
 
     private static function checkoutCompleted(array $s): void
@@ -365,9 +434,10 @@ final class Cloud
             }
             $plan = self::plan($s['metadata']['plan'] ?? null) ? $s['metadata']['plan'] : 'solo';
             self::startTrial($userId, $plan);
+            $current = self::customer($userId);
             Db::update('billing_customers', [
                 'plan' => $plan,
-                'status' => 'active',
+                'status' => ($current['status'] ?? '') === 'comp' ? 'comp' : 'active',
                 'stripe_customer_id' => (string) ($s['customer'] ?? ''),
                 'stripe_subscription_id' => (string) ($s['subscription'] ?? ''),
                 'updated_at' => now(),
@@ -430,8 +500,8 @@ final class Cloud
         $mapped = match ($status) {
             'trialing' => 'trialing',
             'active' => 'active',
-            'past_due', 'unpaid' => 'past_due',
-            default => 'canceled', // canceled, incomplete_expired, paused
+            'past_due' => 'past_due',
+            default => 'canceled', // canceled, unpaid (retries ran out), incomplete_expired, paused
         };
         if ($status === 'incomplete') {
             return; // first payment still being confirmed
@@ -455,6 +525,17 @@ final class Cloud
             }
         }
         Db::update('billing_customers', $row, 'user_id = ?', [$c['user_id']]);
+        self::trackPastDue((int) $c['user_id'], $row['status']);
+    }
+
+    /** Remembers when a customer's payment started failing, for the 14-day grace period. */
+    private static function trackPastDue(int $userId, string $status): void
+    {
+        if ($status !== 'past_due') {
+            kv_delete('billing.past_due:' . $userId);
+        } elseif (kv_get('billing.past_due:' . $userId) === null) {
+            kv_set('billing.past_due:' . $userId, time());
+        }
     }
 
     /* ---------- Reminders ---------- */

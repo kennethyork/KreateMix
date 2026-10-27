@@ -128,7 +128,16 @@ Integrations → Scheduler shows when it last ran and how.
 | `cron_key` | Secret for the web cron URL. |
 | `db_path` | The database file (absolute, or relative to `index.php`'s folder). |
 | `max_upload_mb` | Upload size limit. |
-| `debug` | Show errors and enable the Sandbox platform. |
+| `debug` | Show errors and enable the Sandbox platform. Also lets the app connect to private addresses, so keep it off in production. |
+| `allow_private_urls` | `true` lets KreateMix connect to private network addresses (a Mastodon or PeerTube server on your LAN, an internal webhook). Off by default. |
+
+## Security
+
+- Outgoing requests (webhooks, platform servers you enter, CSV media links, push endpoints) only go to public `http`/`https` addresses. Every redirect is checked too, and the connection is pinned to the checked address. The admin-set AI base URL (for a local Ollama) is the exception.
+- Sign-in is rate limited per account and per address in the database. `CF-Connecting-IP` is only trusted from Cloudflare's own addresses.
+- Changing your password signs out your other browsers. Changing your email asks for your password.
+- In workspaces that require approval, only admins can change autolists (their posts skip approval).
+- Report security problems privately with **Security → Report a vulnerability** on GitHub, not in a public issue.
 
 ## Platform notes
 

@@ -41,6 +41,11 @@ final class CloudController
         if (trim((string) input('website', '')) !== '') {
             redirect('/'); // spam trap
         }
+        // Rate limit first, so the "already an account" answer can't be used to test many emails.
+        if (!kv_rate('signup:' . client_ip(), 5, 3600)) {
+            flash('error', 'Too many sign-ups from your network. Try again later.');
+            redirect('/signup', ['plan' => (string) input('plan', 'solo')]);
+        }
         $data = [
             'name' => trim((string) input('name', '')),
             'email' => trim((string) input('email', '')),
@@ -60,9 +65,6 @@ final class CloudController
         }
         if (!$errors && Db::value('SELECT 1 FROM users WHERE email = ?', [$data['email']])) {
             $errors[] = 'There’s already an account with that email. Sign in instead.';
-        }
-        if (!$errors && !kv_rate('signup:' . client_ip(), 5, 3600)) {
-            $errors[] = 'Too many sign-ups from your network. Try again later.';
         }
         if ($errors) {
             with_old($data);
@@ -124,6 +126,10 @@ final class CloudController
         $sessionId = (string) input('session_id', '');
         if ($sessionId === '' || !preg_match('/^cs_[\w]+$/', $sessionId)) {
             abort(404);
+        }
+        if (!kv_rate('intake:' . client_ip(), 10, 3600)) {
+            flash('error', 'Too many submissions from your network. Try again later.');
+            redirect('/thanks/setup', ['session_id' => $sessionId]);
         }
         $details = [
             'domain' => mb_substr(trim((string) input('domain', '')), 0, 200),
@@ -211,7 +217,7 @@ final class CloudController
         $user = Auth::user();
         $ws = Workspace::current();
         $owner = $ws ? Cloud::ownerOf((int) $ws['id']) : (int) $user['id'];
-        $isOwner = $owner === (int) $user['id'];
+        $isOwner = $owner === (int) $user['id'] || ($owner === null && Auth::isAdmin());
         $c = Cloud::customer($isOwner ? (int) $user['id'] : (int) $owner);
         if ($isOwner && !$c && !Auth::isAdmin()) {
             Cloud::startTrial((int) $user['id'], array_key_first(Cloud::plans()) ?? 'solo');
@@ -227,7 +233,8 @@ final class CloudController
             'ownerName' => $isOwner ? null : Db::value('SELECT name FROM users WHERE id = ?', [$owner]),
             'plans' => Cloud::plans(),
             'usage' => Cloud::usage($isOwner ? (int) $user['id'] : (int) $owner),
-            'active' => Cloud::isActive($c),
+            'active' => $isOwner ? Cloud::isActive($c) : ($ws ? Cloud::workspaceActive((int) $ws['id']) : false),
+            'over' => $isOwner ? Cloud::overLimits((int) $user['id']) : [],
             'stripe' => Cloud::stripeReady(),
             'cloud' => Cloud::settings(),
         ]);
