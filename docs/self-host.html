@@ -7,25 +7,28 @@
 <meta name="description" content="Step-by-step guide: rent a cheap VPS, install CloudPanel, and run KreateMix with HTTPS, cron and backups.">
 <meta name="theme-color" content="#4f46e5">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=IBM+Plex+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <header class="top">
   <div class="wrap">
-    <a class="brand" href="./"><img src="favicon.svg" alt="">KreateMix</a>
-    <nav>
-      <a href="./#features">Features</a>
-      <a href="./#cost">Cost</a>
-      <a href="self-host.html" aria-current="page">Self-host guide</a>
+    <a class="brand" href="./"><img src="favicon.svg" alt="" width="30" height="30">KreateMix</a>
+    <nav aria-label="Site">
+      <a class="wide" href="./#features">Features</a>
+      <a class="wide" href="./#cost">Cost</a>
       <a href="https://github.com/kennethyork/KreateMix">GitHub</a>
+      <a class="nav-cta" href="self-host.html" aria-current="page">Setup guide</a>
     </nav>
   </div>
 </header>
 
 <div class="wrap guide">
-  <aside class="toc">
-    <strong>On this page</strong>
+  <details class="toc" open>
+    <summary>On this page</summary>
     <ol>
       <li><a href="#need">What you need</a></li>
       <li><a href="#vps">Pick a VPS</a></li>
@@ -44,7 +47,7 @@
       <li><a href="#harden">Extra security</a></li>
       <li><a href="#trouble">Troubleshooting</a></li>
     </ol>
-  </aside>
+  </details>
 
   <article class="content">
     <h1>Self-host KreateMix on a $2 VPS with CloudPanel</h1>
@@ -57,16 +60,16 @@
       <li><strong>A computer with a terminal.</strong> On Windows 10 and 11, PowerShell already includes <code>ssh</code>. On a Mac, use Terminal.</li>
     </ul>
     <p>Throughout this guide, replace these placeholders with your own values:</p>
-    <table>
+    <div class="table-scroll"><table>
       <tr><th>Placeholder</th><th>Example</th></tr>
       <tr><td><code>YOUR_SERVER_IP</code></td><td><code>203.0.113.25</code>, from your VPS provider's dashboard</td></tr>
       <tr><td><code>social.yourdomain.com</code></td><td>The address KreateMix will live at</td></tr>
       <tr><td><code>kreatemix</code></td><td>The site user you'll create in CloudPanel</td></tr>
-    </table>
+    </table></div>
 
     <h2 id="vps">2. Pick a VPS</h2>
     <p>CloudPanel needs <strong>1 CPU core, 2 GB of RAM and 10 GB of disk</strong>. KreateMix itself is light: it keeps everything in one SQLite file. These are the cheapest plans that meet CloudPanel's minimum (prices checked October 2026; they change often, so confirm on the provider's site):</p>
-    <table>
+    <div class="table-scroll"><table>
       <tr><th>Plan</th><th>Specs</th><th>Price</th><th>Best for</th></tr>
       <tr>
         <td><strong>IONOS VPS S+</strong> (recommended to start)</td>
@@ -80,7 +83,7 @@
         <td>About $3/month, billed yearly ($35.99/year)</td>
         <td>The lowest price over a full year</td>
       </tr>
-    </table>
+    </table></div>
     <div class="warn">
       <p><strong>Avoid 1 GB plans</strong>, even at $1–2 a month. They're below CloudPanel's minimum, and the panel's database server will run out of memory.</p>
     </div>
@@ -95,10 +98,10 @@
 
     <h2 id="dns">3. Point your domain at the server</h2>
     <p>At the company you bought your domain from (or wherever your DNS is managed, such as Cloudflare), add a DNS record:</p>
-    <table>
+    <div class="table-scroll"><table>
       <tr><th>Type</th><th>Name / Host</th><th>Value</th><th>TTL</th></tr>
       <tr><td>A</td><td><code>social</code> (or <code>@</code> to use the bare domain)</td><td><code>YOUR_SERVER_IP</code></td><td>Auto or 300</td></tr>
-    </table>
+    </table></div>
     <p>Do this now. It can take a few minutes to an hour to start working, and you'll need it working before <a href="#ssl">step 8</a>. If you use Cloudflare, set the record to <strong>DNS only</strong> (grey cloud) until HTTPS is set up.</p>
 
     <h2 id="ssh">4. Connect to the server</h2>
@@ -180,11 +183,11 @@ ls -l</code></pre>
       <li>Create the admin account.</li>
     </ol>
     <p>On that first visit KreateMix creates two files. Both are hidden from the web:</p>
-    <table>
+    <div class="table-scroll"><table>
       <tr><th>File</th><th>Where</th><th>What</th></tr>
       <tr><td><code>.ht.kreatemix-config.php</code></td><td>Next to <code>index.php</code></td><td>Settings and the key that encrypts your accounts' tokens</td></tr>
       <tr><td><code>.ht.kreatemix-….sqlite</code></td><td><code>~/htdocs/</code>, one folder up, out of the web server's reach</td><td>The database: posts, accounts, analytics and uploaded media</td></tr>
-    </table>
+    </table></div>
 
     <h2 id="cron">10. Check the scheduler</h2>
     <p>The scheduler wakes KreateMix every minute to publish posts that are due, refresh analytics and fetch comments. Without it, scheduled posts won't go out.</p>
@@ -209,13 +212,13 @@ ls -l</code></pre>
 
     <h2 id="php">11. PHP settings for video uploads</h2>
     <p>PHP's default upload limit is too small for video. Open the site's <strong>Settings</strong> tab, scroll to <strong>PHP Settings</strong>, set these and click <strong>Save</strong>:</p>
-    <table>
+    <div class="table-scroll"><table>
       <tr><th>Setting</th><th>Value</th></tr>
       <tr><td>Memory Limit</td><td><code>256M</code></td></tr>
       <tr><td>Max Execution Time</td><td><code>300</code></td></tr>
       <tr><td>Post Max Size</td><td><code>256M</code></td></tr>
       <tr><td>Upload Max Filesize</td><td><code>256M</code></td></tr>
-    </table>
+    </table></div>
     <p>If large uploads still fail with "413 Request Entity Too Large", open the site's <strong>Vhost</strong> tab, find <code>client_max_body_size</code>, set it to <code>256M</code> and save.</p>
 
     <h2 id="platforms">12. Connect your social networks</h2>
@@ -226,7 +229,7 @@ ls -l</code></pre>
       <li>Paste the app's ID and secret back into KreateMix and save.</li>
       <li>Go to <strong>Accounts</strong> and connect.</li>
     </ol>
-    <table>
+    <div class="table-scroll"><table>
       <tr><th>Network</th><th>What you need</th></tr>
       <tr><td>Mastodon, Pixelfed, Bluesky</td><td>Nothing. Connect straight away (Bluesky uses an app password).</td></tr>
       <tr><td>PeerTube</td><td>Just an account on any public PeerTube server (find one at <a href="https://joinpeertube.org/browse-content">joinpeertube.org</a>). You don't run a video server yourself.</td></tr>
@@ -235,7 +238,7 @@ ls -l</code></pre>
       <tr><td>YouTube, Google Business</td><td>A Google Cloud OAuth client</td></tr>
       <tr><td>X</td><td>An X developer app on an API plan with write access (paid)</td></tr>
       <tr><td>TikTok, Pinterest</td><td>A developer app on their sites. TikTok posts privately until your app passes its audit.</td></tr>
-    </table>
+    </table></div>
     <p>Meta, Google and TikTok ask for a privacy policy and terms page when you submit your app for review. KreateMix already serves them at <code>/privacy</code>, <code>/terms</code> and <code>/data-deletion</code>; edit them under <strong>Legal pages</strong>.</p>
     <p>Optional extras, under <strong>Integrations</strong>: a mail server for emailed reports, an AI key, Canva, Google Drive and ad accounts. The <a href="https://github.com/kennethyork/KreateMix#readme">README</a> has notes for each.</p>
 
@@ -274,7 +277,7 @@ systemctl restart ssh</code></pre>
     <p>As root, run <code>apt update &amp;&amp; apt -y upgrade</code> about once a month, and reboot with <code>reboot</code> if it says a restart is required.</p>
 
     <h2 id="trouble">16. Troubleshooting</h2>
-    <table>
+    <div class="table-scroll"><table>
       <tr><th>Problem</th><th>Fix</th></tr>
       <tr>
         <td>Scheduled posts stay "scheduled" and never go out</td>
@@ -304,15 +307,20 @@ systemctl restart ssh</code></pre>
         <td>Can't reach CloudPanel on port 8443</td>
         <td>Your IP probably changed since you restricted the port. SSH is still open, so tunnel through it: run <code>ssh -L 8443:localhost:8443 root@YOUR_SERVER_IP</code>, open <code>https://localhost:8443</code>, and update the firewall rule from step 6 with your new IP.</td>
       </tr>
-    </table>
+    </table></div>
     <p>Still stuck? <a href="https://github.com/kennethyork/KreateMix/issues">Open an issue on GitHub</a> with what you tried and any error from the Logs tab.</p>
   </article>
 </div>
 
 <footer>
   <div class="wrap">
-    <span>© 2026 Kenneth York · AGPL-3.0-or-later</span>
-    <span><a href="./">Home</a> · <a href="https://github.com/kennethyork/KreateMix">GitHub</a> · <a href="https://www.cloudpanel.io/docs/v2/">CloudPanel docs</a></span>
+    <span>© 2026 Kenneth York. AGPL-3.0-or-later.</span>
+    <nav aria-label="Footer">
+      <a href="./">Home</a>
+      <a href="https://github.com/kennethyork/KreateMix">GitHub</a>
+      <a href="https://www.cloudpanel.io/docs/v2/">CloudPanel docs</a>
+      <a href="https://github.com/kennethyork/KreateMix/issues">Report a problem</a>
+    </nav>
   </div>
 </footer>
 

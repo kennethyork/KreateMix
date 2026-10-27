@@ -13,3 +13,7 @@ document.querySelectorAll('pre').forEach(function (pre) {
   });
   pre.appendChild(btn);
 });
+
+// On small screens the table of contents starts folded so the guide comes first.
+var toc = document.querySelector('details.toc');
+if (toc && window.matchMedia('(max-width: 900px)').matches) toc.open = false;
