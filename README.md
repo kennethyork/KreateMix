@@ -34,6 +34,7 @@ Don't want to run a server? **KreateMix Cloud** is the hosted version, with a 7-
 - **Webhooks** — signed with HMAC-SHA256, retried with backoff
 - **Platforms** — X, Mastodon, Bluesky, Facebook Pages, Instagram, LinkedIn, YouTube, Threads, TikTok, Pinterest, Google Business Profile
 - **Works offline** — drafts autosave on your device, pages you've opened still load without a connection, and posts made offline send themselves when you're back
+- **Media cached on your device** — images and videos you've viewed are kept in the browser (IndexedDB, up to 200 MB, files up to 25 MB) so they load instantly and show offline. The server keeps the real copy, so scheduled posts still go out with the browser closed. Signing out clears the cache
 - Dark mode, mobile layout, encrypted tokens at rest
 
 ## Requirements
