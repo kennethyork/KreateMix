@@ -378,7 +378,7 @@ function account_avatar(array $a, string $size = ''): string
 /** Small colored platform marker with a short abbreviation (no brand logos). */
 function provider_badge(string $key, string $class = 'pbadge'): string
 {
-    $abbr = ['x' => 'X', 'mastodon' => 'M', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in',
+    $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in',
         'youtube' => 'YT', 'threads' => 'Th', 'tiktok' => 'TT', 'pinterest' => 'P', 'google_business' => 'G', 'sandbox' => 'S'];
     $meta = provider_meta($key);
     return '<span class="' . e($class) . '" style="--pc: ' . e($meta['color']) . '" aria-hidden="true">' . e($abbr[$key] ?? strtoupper(substr($key, 0, 1))) . '</span>';
@@ -3954,6 +3954,7 @@ final class BioController
             'x' => $u ? "https://x.com/$u" : null,
             'bluesky' => $u ? "https://bsky.app/profile/$u" : null,
             'mastodon' => str_contains($u, '@') ? 'https://' . explode('@', $u)[1] . '/@' . explode('@', $u)[0] : null,
+            'pixelfed' => str_contains($u, '@') ? 'https://' . explode('@', $u)[1] . '/' . explode('@', $u)[0] : null,
             'instagram' => $u ? "https://www.instagram.com/$u/" : null,
             'threads' => $u ? "https://www.threads.net/@$u" : null,
             'tiktok' => $u ? "https://www.tiktok.com/@$u" : null,
@@ -10041,9 +10042,9 @@ use App\Db;
 use App\Http;
 
 /** Mastodon (and compatible servers). Registers an app on each server automatically. */
-final class Mastodon extends OAuth2Provider
+class Mastodon extends OAuth2Provider
 {
-    private string $server = '';
+    protected string $server = '';
 
     public static function key(): string { return 'mastodon'; }
     public static function name(): string { return 'Mastodon'; }
@@ -10070,7 +10071,10 @@ final class Mastodon extends OAuth2Provider
     protected function tokenEndpoint(): string { return $this->base() . '/oauth/token'; }
     protected function scopes(): array { return ['read', 'write']; }
 
-    private function base(): string
+    /** Path for media uploads; v2 processes large files in the background. */
+    protected function mediaPath(): string { return '/api/v2/media'; }
+
+    protected function base(): string
     {
         $server = $this->server ?: (string) ($this->accountData()['server'] ?? '');
         return 'https://' . $server;
@@ -10083,7 +10087,7 @@ final class Mastodon extends OAuth2Provider
         $raw = preg_replace('#^@?[^@]+@#', '', $raw); // allow "@me@server"
         $host = explode('/', $raw)[0];
         if (!preg_match('/^[a-z0-9.-]+\.[a-z]{2,}$/', $host)) {
-            throw new ProviderException('Enter the server’s domain, like mastodon.social.');
+            throw new ProviderException('Enter the server’s domain, like ' . static::connectFields()['server']['placeholder'] . '.');
         }
         return $host;
     }
@@ -10091,7 +10095,7 @@ final class Mastodon extends OAuth2Provider
     /** Gets or registers this install's app on the given server. */
     private function appFor(string $server, string $redirectUri): array
     {
-        $key = 'mastodon@' . $server;
+        $key = static::key() . '@' . $server;
         $row = Db::one('SELECT credentials FROM services WHERE provider = ?', [$key]);
         $app = Crypt::decryptArray($row['credentials'] ?? null);
         if (!empty($app['client_id']) && ($app['redirect_uri'] ?? '') === $redirectUri) {
@@ -10154,9 +10158,9 @@ final class Mastodon extends OAuth2Provider
         return ['id' => (string) $res['json']['id'], 'url' => $res['json']['url'] ?? null];
     }
 
-    private function upload(array $m): string
+    protected function upload(array $m): string
     {
-        $res = $this->api('POST', $this->base() . '/api/v2/media', [
+        $res = $this->api('POST', $this->base() . $this->mediaPath(), [
             'multipart' => ['file' => new \CURLFile($m['path'], $m['mime'], $m['name'])],
             'timeout' => 300,
         ]);
@@ -10221,6 +10225,45 @@ final class Mastodon extends OAuth2Provider
     public function firstComment(string $providerPostId, string $text): void
     {
         $this->api('POST', $this->base() . '/api/v1/statuses', ['json' => ['status' => $text, 'in_reply_to_id' => $providerPostId, 'visibility' => 'public']]);
+    }
+}
+
+}
+
+namespace App\Providers {
+
+// ---- Providers/Pixelfed.php ----
+use App\MediaTools;
+
+/** Pixelfed: photo and video sharing on the fediverse. Speaks the Mastodon API, so only the differences live here. */
+final class Pixelfed extends Mastodon
+{
+    public static function key(): string { return 'pixelfed'; }
+    public static function name(): string { return 'Pixelfed'; }
+    public static function color(): string { return '#f2416b'; }
+    public static function textLimit(): int { return 500; }
+
+    public static function mediaRules(): array
+    {
+        // Server defaults: 4 items per album, 15 MB per photo. Admins can change both.
+        return ['max_media' => 4, 'video' => true, 'requires_media' => true, 'requires_video' => false];
+    }
+
+    public static function connectFields(): array
+    {
+        return ['server' => ['label' => 'Server', 'type' => 'text', 'placeholder' => 'pixelfed.social']];
+    }
+
+    public static function setupHint(): string
+    {
+        return 'No keys needed. KreateMix registers itself on each Pixelfed server the first time someone connects an account there. Every post needs at least one photo or video.';
+    }
+
+    protected function mediaPath(): string { return '/api/v1/media'; }
+
+    protected function upload(array $m): string
+    {
+        return parent::upload(MediaTools::fit($m, 15 * 1024 * 1024));
     }
 }
 
@@ -10351,6 +10394,7 @@ final class Registry
     private const CORE = [
         X::class,
         Mastodon::class,
+        Pixelfed::class,
         Bluesky::class,
         Facebook::class,
         Instagram::class,
@@ -14248,7 +14292,7 @@ $radius = ($theme['button'] ?? 'rounded') === 'square' ? '8px' : '999px';
     <?php if ($page['bio'] !== ''): ?><p class="bio"><?= e($page['bio']) ?></p><?php endif; ?>
     <?php if ($socials): ?>
         <nav class="socials" aria-label="Social profiles">
-            <?php foreach ($socials as $href => $a): $abbr = ['x' => 'X', 'mastodon' => 'M', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in', 'youtube' => 'YT', 'threads' => '@', 'tiktok' => 'TT', 'pinterest' => 'P'][$a['provider']] ?? '•'; ?>
+            <?php foreach ($socials as $href => $a): $abbr = ['x' => 'X', 'mastodon' => 'M', 'pixelfed' => 'Px', 'bluesky' => 'B', 'facebook' => 'f', 'instagram' => 'IG', 'linkedin' => 'in', 'youtube' => 'YT', 'threads' => '@', 'tiktok' => 'TT', 'pinterest' => 'P'][$a['provider']] ?? '•'; ?>
                 <a href="<?= e($href) ?>" target="_blank" rel="noopener me" title="<?= e(provider_meta($a['provider'])['name']) ?>" aria-label="<?= e(provider_meta($a['provider'])['name']) ?>"><?= e($abbr) ?></a>
             <?php endforeach; ?>
         </nav>
@@ -19139,7 +19183,7 @@ MC_ASSET_1],
             return String(name || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
         }
         function abbr(key) {
-            return { x: 'X', mastodon: 'M', bluesky: 'B', facebook: 'f', instagram: 'IG', linkedin: 'in', youtube: 'YT', threads: 'Th', tiktok: 'TT', pinterest: 'P', google_business: 'G', sandbox: 'S' }[key] || key[0].toUpperCase();
+            return { x: 'X', mastodon: 'M', pixelfed: 'Px', bluesky: 'B', facebook: 'f', instagram: 'IG', linkedin: 'in', youtube: 'YT', threads: 'Th', tiktok: 'TT', pinterest: 'P', google_business: 'G', sandbox: 'S' }[key] || key[0].toUpperCase();
         }
 
         form.addEventListener('input', update);
